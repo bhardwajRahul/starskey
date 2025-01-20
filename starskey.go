@@ -247,26 +247,158 @@ func Open(config *Config) (*Starskey, error) {
 	return skey, nil
 }
 
+// BeginTxn begins a new transaction
 func (skey *Starskey) BeginTxn() *Txn {
-	return nil
+	return &Txn{
+		operations: make([]*TxnOperation, 0),
+		lock:       &sync.Mutex{},
+		db:         skey,
+	}
 }
 
+// Put puts a key-value pair into the database from a transaction
 func (txn *Txn) Put(key, value []byte) {
+	txn.lock.Lock()
+	defer txn.lock.Unlock()
 
+	txn.operations = append(txn.operations, &TxnOperation{
+		key:      key,
+		value:    value,
+		op:       Put,
+		commited: false,
+		rollback: &TxnRollbackOperation{
+			key:   key,
+			value: Tombstone,
+			op:    Delete,
+		},
+	})
 }
 
+// Delete deletes a key from the database from a transaction
 func (txn *Txn) Delete(key []byte) {
-
+	txn.lock.Lock()
+	defer txn.lock.Unlock()
+	currentValue, exists := txn.db.memtable.Get(key)
+	if exists {
+		txn.operations = append(txn.operations, &TxnOperation{
+			key:      key,
+			value:    currentValue.Value,
+			op:       Delete,
+			commited: false,
+			rollback: &TxnRollbackOperation{
+				key:   key,
+				value: currentValue.Value,
+				op:    Put,
+			},
+		})
+		return
+	}
+	txn.operations = append(txn.operations, &TxnOperation{
+		key:      key,
+		value:    Tombstone,
+		op:       Delete,
+		commited: false,
+		rollback: nil,
+	})
 }
 
+// Commit commits a transaction
 func (txn *Txn) Commit() error {
+	txn.lock.Lock()
+	defer txn.lock.Unlock()
+	for _, op := range txn.operations {
+		var record *WALRecord
+		switch op.op {
+		case Put:
+			// Create a WAL record
+			record = &WALRecord{
+				Key:   op.key,
+				Value: op.value,
+				Op:    Put,
+			}
+
+		case Delete:
+			record = &WALRecord{
+				Key:   op.key,
+				Value: op.value,
+				Op:    Delete,
+			}
+		}
+
+		// Serialize the WAL record
+		walSerialized, err := serializeWalRecord(record, txn.db.config.Compression)
+		if err != nil {
+			_ = txn.Rollback()
+			return err
+		}
+
+		// Write the WAL record to the write-ahead log
+		if _, err = txn.db.wal.Write(walSerialized); err != nil {
+			_ = txn.Rollback()
+			return err
+		}
+
+		// Put the key-value pair into the memtable
+		err = txn.db.memtable.Put(op.key, op.value)
+		if err != nil {
+			_ = txn.Rollback()
+			return err
+		}
+
+		op.commited = true
+
+	}
+
+	if txn.db.memtable.SizeOfTree >= txn.db.config.FlushThreshold {
+		// Sorted run to level 1
+		if err := txn.db.run(); err != nil {
+			_ = txn.Rollback()
+			return err
+		}
+	}
+
 	return nil
+
 }
 
+// Rollback rolls back a transaction
 func (txn *Txn) Rollback() error {
+	txn.lock.Lock()
+	defer txn.lock.Unlock()
+	for _, op := range txn.operations {
+		if op.commited {
+			if op.rollback != nil {
+				// Create a WAL record
+				record := &WALRecord{
+					Key:   op.rollback.key,
+					Value: op.rollback.value,
+					Op:    op.rollback.op,
+				}
+
+				// Serialize the WAL record
+				walSerialized, err := serializeWalRecord(record, txn.db.config.Compression)
+				if err != nil {
+					return err
+				}
+
+				// Write the WAL record to the write-ahead log
+				if _, err = txn.db.wal.Write(walSerialized); err != nil {
+					return err
+				}
+
+				// Put the key-value pair into the memtable
+				err = txn.db.memtable.Put(op.rollback.key, op.rollback.value)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
+// Put puts a key-value pair into the database
 func (skey *Starskey) Put(key, value []byte) error {
 	// Lock for thread safety
 	skey.lock.Lock()
@@ -381,17 +513,20 @@ func (skey *Starskey) Get(key []byte) ([]byte, error) {
 
 // Delete deletes a key from the database
 func (skey *Starskey) Delete(key []byte) error {
-	return nil
+	return skey.Put(key, Tombstone)
 }
 
+// Range retrieves a range of values from the database
 func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
 	return nil, nil
 }
 
+// FilterKeys retrieves values from the database that match a key filter
 func (skey *Starskey) FilterKeys(compare func(key []byte) bool) ([][]byte, error) {
 	return nil, nil
 }
 
+// Close closes the Starskey instance
 func (skey *Starskey) Close() error {
 	log.Println("Closing WAL")
 	// Close the write-ahead log
