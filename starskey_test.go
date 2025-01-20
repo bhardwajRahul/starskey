@@ -546,13 +546,13 @@ func TestStarskey_FilterKeys(t *testing.T) {
 	}
 
 	compareFunc := func(key []byte) bool {
-		// if has c starting in key using regex
+		// if has prefix "c" return true
 		return bytes.HasPrefix(key, []byte("c"))
 	}
 
 	results, err := starskey.FilterKeys(compareFunc)
 	if err != nil {
-		t.Fatalf("Failed to range: %v", err)
+		t.Fatalf("Failed to filter: %v", err)
 	}
 
 	for _, key := range results {
