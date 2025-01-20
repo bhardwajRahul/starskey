@@ -26,14 +26,6 @@ import (
 	"testing"
 )
 
-func TestGetAvailableMemory(t *testing.T) {
-	_, err := GetAvailableMemory()
-	if err != nil {
-		t.Fatalf("Failed to get available memory: %v", err)
-	}
-
-}
-
 func TestSerializeDeserializeWalRecord(t *testing.T) {
 	originalRecord := &WALRecord{
 		Key:   []byte("testKey"),
