@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/klauspost/compress/snappy"
 	"github.com/starskey-io/starskey/bloomfilter"
 	"github.com/starskey-io/starskey/pager"
 	"github.com/starskey-io/starskey/ttree"
@@ -58,6 +59,7 @@ type Config struct {
 	SizeFactor     uint64      // Size factor for each level
 	BloomFilter    bool        // Enable bloom filter
 	Logging        bool        // Enable log file
+	Compression    bool        // Enable compression
 }
 
 // Level represents a disk level
@@ -149,6 +151,24 @@ func Open(config *Config) (*Starskey, error) {
 	// Create new starskey instance
 	skey := &Starskey{
 		config: config,
+	}
+
+	// Validate configs
+	if config.FlushThreshold == 0 {
+		return nil, errors.New("flush threshold cannot be zero")
+	}
+
+	if config.MaxLevel < 3 {
+		return nil, errors.New("max level cannot be less than 3")
+	}
+
+	if config.SizeFactor < 4 {
+		return nil, errors.New("size factor cannot be less than 4")
+	}
+
+	if len(config.Directory) == 0 {
+		return nil, errors.New("directory cannot be empty")
+
 	}
 
 	// We check if configured directory ends with a slash
@@ -260,7 +280,7 @@ func (skey *Starskey) Put(key, value []byte) error {
 	}
 
 	// Serialize the WAL record
-	walSerialized, err := serializeWalRecord(record)
+	walSerialized, err := serializeWalRecord(record, skey.config.Compression)
 	if err != nil {
 		return err
 	}
@@ -326,7 +346,7 @@ func (skey *Starskey) Get(key []byte) ([]byte, error) {
 				if err != nil {
 					break
 				}
-				klogRecord, err := deserializeKLogRecord(data)
+				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression)
 				if err != nil {
 					return nil, err
 				}
@@ -338,7 +358,7 @@ func (skey *Starskey) Get(key []byte) ([]byte, error) {
 					if err != nil {
 						return nil, err
 					}
-					vlogRecord, err := deserializeVLogRecord(read)
+					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression)
 					if err != nil {
 						return nil, err
 					}
@@ -411,16 +431,29 @@ func (skey *Starskey) Close() error {
 }
 
 // serializeWalRecord serializes a WAL record
-func serializeWalRecord(record *WALRecord) ([]byte, error) {
+func serializeWalRecord(record *WALRecord, compress bool) ([]byte, error) {
 	data, err := bson.Marshal(record)
 	if err != nil {
 		return nil, err
+	}
+
+	if compress {
+		compressedData := snappy.Encode(nil, data)
+		return compressedData, nil
 	}
 	return data, nil
 }
 
 // deserializeWalRecord deserializes a WAL record
-func deserializeWalRecord(data []byte) (*WALRecord, error) {
+func deserializeWalRecord(data []byte, decompress bool) (*WALRecord, error) {
+	if decompress {
+		decompressedData, err := snappy.Decode(nil, data)
+		if err != nil {
+			log.Fatal("Error decompressing data:", err)
+		}
+		data = decompressedData
+	}
+
 	var record WALRecord
 	err := bson.Unmarshal(data, &record)
 	if err != nil {
@@ -430,16 +463,29 @@ func deserializeWalRecord(data []byte) (*WALRecord, error) {
 }
 
 // serializeKLogRecord serializes a key log record
-func serializeKLogRecord(record *KLogRecord) ([]byte, error) {
+func serializeKLogRecord(record *KLogRecord, compress bool) ([]byte, error) {
 	data, err := bson.Marshal(record)
 	if err != nil {
 		return nil, err
+	}
+
+	if compress {
+		compressedData := snappy.Encode(nil, data)
+		return compressedData, nil
 	}
 	return data, nil
 }
 
 // deserializeKLogRecord deserializes a key log record
-func deserializeKLogRecord(data []byte) (*KLogRecord, error) {
+func deserializeKLogRecord(data []byte, decompress bool) (*KLogRecord, error) {
+	if decompress {
+		decompressedData, err := snappy.Decode(nil, data)
+		if err != nil {
+			log.Fatal("Error decompressing data:", err)
+		}
+		data = decompressedData
+	}
+
 	var record KLogRecord
 	err := bson.Unmarshal(data, &record)
 	if err != nil {
@@ -449,16 +495,29 @@ func deserializeKLogRecord(data []byte) (*KLogRecord, error) {
 }
 
 // serializeVLogRecord serializes a value log record
-func serializeVLogRecord(record *VLogRecord) ([]byte, error) {
+func serializeVLogRecord(record *VLogRecord, compress bool) ([]byte, error) {
 	data, err := bson.Marshal(record)
 	if err != nil {
 		return nil, err
+	}
+
+	if compress {
+		compressedData := snappy.Encode(nil, data)
+		return compressedData, nil
 	}
 	return data, nil
 }
 
 // deserializeVLogRecord deserializes a value log record
-func deserializeVLogRecord(data []byte) (*VLogRecord, error) {
+func deserializeVLogRecord(data []byte, decompress bool) (*VLogRecord, error) {
+	if decompress {
+		decompressedData, err := snappy.Decode(nil, data)
+		if err != nil {
+			log.Fatal("Error decompressing data:", err)
+		}
+		data = decompressedData
+	}
+
 	var record VLogRecord
 	err := bson.Unmarshal(data, &record)
 	if err != nil {
@@ -596,7 +655,7 @@ func (skey *Starskey) replayWAL() error {
 		}
 
 		// Deserialize the WAL record
-		record, err := deserializeWalRecord(data)
+		record, err := deserializeWalRecord(data, skey.config.Compression)
 		if err != nil {
 			return err
 		}
@@ -713,7 +772,7 @@ func (skey *Starskey) run() error {
 				Value: entry.Value,
 			}
 
-			vlogSerialized, err := serializeVLogRecord(vlogRecord)
+			vlogSerialized, err := serializeVLogRecord(vlogRecord, skey.config.Compression)
 			if err != nil {
 				_ = klog.Close()
 				_ = vlog.Close()
@@ -744,7 +803,7 @@ func (skey *Starskey) run() error {
 				ValPageNum: uint64(pg),
 			}
 
-			klogSerialized, err := serializeKLogRecord(klogRecord)
+			klogSerialized, err := serializeKLogRecord(klogRecord, skey.config.Compression)
 			if err != nil {
 				_ = klog.Close()
 				_ = vlog.Close()
@@ -825,7 +884,7 @@ func (skey *Starskey) compact(level int) error {
 			mergedTable := skey.mergeTables(skey.levels[level].sstables, level)
 			if skey.config.BloomFilter {
 				// Create a new bloom filter for the merged table
-				if err := mergedTable.createBloomFilter(); err != nil {
+				if err := mergedTable.createBloomFilter(skey); err != nil {
 					return err
 				}
 			}
@@ -851,7 +910,7 @@ func (skey *Starskey) compact(level int) error {
 
 	if skey.config.BloomFilter {
 		// Create a new bloom filter for the merged table
-		if err := mergedTable.createBloomFilter(); err != nil {
+		if err := mergedTable.createBloomFilter(skey); err != nil {
 			return err
 		}
 	}
@@ -940,7 +999,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 		hasMore := it.Next()
 		var current *KLogRecord
 		if hasMore {
-			deserializedKLogRecord, err := deserializeKLogRecord(it.CurrentData)
+			deserializedKLogRecord, err := deserializeKLogRecord(it.CurrentData, skey.config.Compression)
 			if err != nil {
 				_ = klog.Close()
 				_ = vlog.Close()
@@ -986,7 +1045,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 			return nil
 		}
 
-		vlogRecord, err := deserializeVLogRecord(read)
+		vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression)
 		if err != nil {
 			_ = klog.Close()
 			_ = vlog.Close()
@@ -999,7 +1058,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 			// We skip the tombstone
 			iterators[smallestIdx].hasMore = iterators[smallestIdx].iterator.Next()
 			if iterators[smallestIdx].hasMore {
-				deserializedKLogRecord, err := deserializeKLogRecord(iterators[smallestIdx].iterator.CurrentData)
+				deserializedKLogRecord, err := deserializeKLogRecord(iterators[smallestIdx].iterator.CurrentData, skey.config.Compression)
 				if err != nil {
 					_ = klog.Close()
 					_ = vlog.Close()
@@ -1013,7 +1072,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 		}
 
 		// Then we write it to new value log
-		vlogRecordSerialized, err := serializeVLogRecord(vlogRecord)
+		vlogRecordSerialized, err := serializeVLogRecord(vlogRecord, skey.config.Compression)
 		if err != nil {
 			_ = klog.Close()
 			_ = vlog.Close()
@@ -1037,7 +1096,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 			ValPageNum: uint64(pg),
 		}
 
-		klogRecordSerialized, err := serializeKLogRecord(klogRecord)
+		klogRecordSerialized, err := serializeKLogRecord(klogRecord, skey.config.Compression)
 		if err != nil {
 			_ = klog.Close()
 			_ = vlog.Close()
@@ -1061,7 +1120,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 
 		it.hasMore = it.iterator.Next()
 		if it.hasMore {
-			deserializedKLogRecord, err := deserializeKLogRecord(it.iterator.CurrentData)
+			deserializedKLogRecord, err := deserializeKLogRecord(it.iterator.CurrentData, skey.config.Compression)
 			if err != nil {
 				_ = klog.Close()
 				_ = vlog.Close()
@@ -1116,7 +1175,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 }
 
 // createBloomFilter creates a bloom filter for the SSTable
-func (sst *SSTable) createBloomFilter() error {
+func (sst *SSTable) createBloomFilter(skey *Starskey) error {
 
 	sst.bloomfilter = bloomfilter.New(uint(sst.klog.PageCount()), BloomFilterProbability)
 
@@ -1133,7 +1192,7 @@ func (sst *SSTable) createBloomFilter() error {
 		if err != nil {
 			break
 		}
-		klogRecord, err := deserializeKLogRecord(data)
+		klogRecord, err := deserializeKLogRecord(data, skey.config.Compression)
 		if err != nil {
 			return err
 		}

@@ -33,13 +33,13 @@ func TestSerializeDeserializeWalRecord(t *testing.T) {
 	}
 
 	// Serialize the original record
-	serializedData, err := serializeWalRecord(originalRecord)
+	serializedData, err := serializeWalRecord(originalRecord, false)
 	if err != nil {
 		t.Fatalf("Failed to serialize WAL record: %v", err)
 	}
 
 	// Deserialize the data back into a WALRecord
-	deserializedRecord, err := deserializeWalRecord(serializedData)
+	deserializedRecord, err := deserializeWalRecord(serializedData, false)
 	if err != nil {
 		t.Fatalf("Failed to deserialize WAL record: %v", err)
 	}
@@ -57,13 +57,13 @@ func TestSerializeDeserializeKLogRecord(t *testing.T) {
 	}
 
 	// Serialize the original record
-	serializedData, err := serializeKLogRecord(originalRecord)
+	serializedData, err := serializeKLogRecord(originalRecord, false)
 	if err != nil {
 		t.Fatalf("Failed to serialize KLog record: %v", err)
 	}
 
 	// Deserialize the data back into a KLogRecord
-	deserializedRecord, err := deserializeKLogRecord(serializedData)
+	deserializedRecord, err := deserializeKLogRecord(serializedData, false)
 	if err != nil {
 		t.Fatalf("Failed to deserialize KLog record: %v", err)
 
@@ -81,13 +81,86 @@ func TestSerializeDeserializeVLogRecord(t *testing.T) {
 	}
 
 	// Serialize the original record
-	serializedData, err := serializeVLogRecord(originalRecord)
+	serializedData, err := serializeVLogRecord(originalRecord, false)
 	if err != nil {
 		t.Fatalf("Failed to serialize VLog record: %v", err)
 	}
 
 	// Deserialize the data back into a VLogRecord
-	deserializedRecord, err := deserializeVLogRecord(serializedData)
+	deserializedRecord, err := deserializeVLogRecord(serializedData, false)
+	if err != nil {
+		t.Fatalf("Failed to deserialize VLog record: %v", err)
+	}
+
+	// Check if the deserialized record matches the original record
+	if !reflect.DeepEqual(originalRecord, deserializedRecord) {
+		t.Errorf("Deserialized record does not match the original record.\nOriginal: %+v\nDeserialized: %+v", originalRecord, deserializedRecord)
+	}
+}
+
+func TestSerializeDeserializeWalRecordCompress(t *testing.T) {
+	originalRecord := &WALRecord{
+		Key:   []byte("testKey"),
+		Value: []byte("testValue"),
+		Op:    Put,
+	}
+
+	// Serialize the original record
+	serializedData, err := serializeWalRecord(originalRecord, true)
+	if err != nil {
+		t.Fatalf("Failed to serialize WAL record: %v", err)
+	}
+
+	// Deserialize the data back into a WALRecord
+	deserializedRecord, err := deserializeWalRecord(serializedData, true)
+	if err != nil {
+		t.Fatalf("Failed to deserialize WAL record: %v", err)
+	}
+
+	// Check if the deserialized record matches the original record
+	if !reflect.DeepEqual(originalRecord, deserializedRecord) {
+		t.Errorf("Deserialized record does not match the original record.\nOriginal: %+v\nDeserialized: %+v", originalRecord, deserializedRecord)
+	}
+}
+
+func TestSerializeDeserializeKLogRecordCompress(t *testing.T) {
+	originalRecord := &KLogRecord{
+		Key:        []byte("testKey"),
+		ValPageNum: 12345,
+	}
+
+	// Serialize the original record
+	serializedData, err := serializeKLogRecord(originalRecord, true)
+	if err != nil {
+		t.Fatalf("Failed to serialize KLog record: %v", err)
+	}
+
+	// Deserialize the data back into a KLogRecord
+	deserializedRecord, err := deserializeKLogRecord(serializedData, true)
+	if err != nil {
+		t.Fatalf("Failed to deserialize KLog record: %v", err)
+
+	}
+
+	// Check if the deserialized record matches the original record
+	if !reflect.DeepEqual(originalRecord, deserializedRecord) {
+		t.Errorf("Deserialized record does not match the original record.\nOriginal: %+v\nDeserialized: %+v", originalRecord, deserializedRecord)
+	}
+}
+
+func TestSerializeDeserializeVLogRecordCompress(t *testing.T) {
+	originalRecord := &VLogRecord{
+		Value: []byte("testValue"),
+	}
+
+	// Serialize the original record
+	serializedData, err := serializeVLogRecord(originalRecord, true)
+	if err != nil {
+		t.Fatalf("Failed to serialize VLog record: %v", err)
+	}
+
+	// Deserialize the data back into a VLogRecord
+	deserializedRecord, err := deserializeVLogRecord(serializedData, true)
 	if err != nil {
 		t.Fatalf("Failed to deserialize VLog record: %v", err)
 	}
