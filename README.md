@@ -8,11 +8,11 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 - **Configurable options** You can configure many options such as max levels, memtable threshold, bloom filter, and more.
 - **WAL with recovery** Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
 - **Key value separation** Keys and values are stored separately for sstables.
-- **Bloom filters** - Each sstable has an in memory bloom filter to reduce disk reads.
+- **Bloom filters** Each sstable has an in memory bloom filter to reduce disk reads.
 - **Fast** up to 400k+ ops per second.
-- **Compression** - Snappy compression is available.
-- **Logging** - Logging to file is available.
-- **Thread safe** - Starskey is thread safe.
+- **Compression** Snappy compression is available.
+- **Logging** Logging to file is available.
+- **Thread safe** Starskey is thread safe.
 
 ## Basic Example
 Below is a basic example of how to use starskey.
