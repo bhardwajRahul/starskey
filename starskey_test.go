@@ -197,7 +197,7 @@ func TestOpen(t *testing.T) {
 	}
 }
 
-func TestLSMTree_Put(t *testing.T) {
+func TestStarskey_Put(t *testing.T) {
 	os.RemoveAll("test")
 	defer os.RemoveAll("test")
 
@@ -247,6 +247,54 @@ func TestLSMTree_Put(t *testing.T) {
 	}
 
 	log.Println(size)
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+
+}
+
+func TestStarskey_BeginTxn(t *testing.T) {
+	os.RemoveAll("test")
+	defer os.RemoveAll("test")
+
+	// Define a valid configuration
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+		Logging:        false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	txn := starskey.BeginTxn()
+	if txn == nil {
+		t.Fatalf("Failed to begin transaction")
+	}
+
+	txn.Put([]byte("key"), []byte("value"))
+
+	if err := txn.Commit(); err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+
+	// Get
+	val, err := starskey.Get([]byte("key"))
+	if err != nil {
+		t.Fatalf("Failed to get key-value pair: %v", err)
+	}
+
+	if !reflect.DeepEqual(val, []byte("value")) {
+		t.Fatalf("Value does not match expected value")
+
+	}
 
 	if err := starskey.Close(); err != nil {
 		t.Fatalf("Failed to close starskey: %v", err)
