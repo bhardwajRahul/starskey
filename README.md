@@ -10,8 +10,12 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 - **Key value separation** Keys and values are stored separately for sstables.
 - **Bloom filters** - Each sstable has an in memory bloom filter to reduce disk reads.
 - **Fast** up to 400k+ ops per second.
+- **Compression** - Snappy compression is available.
+- **Logging** - Logging to file is available.
+- **Thread safe** - Starskey is thread safe.
 
 ## Basic Example
+Below is a basic example of how to use starskey.
 ```go
 import (
     "github.com/starskey-io/starskey"
@@ -59,6 +63,7 @@ fmt.Println(string(key), string(v))
 ```
 
 ## Range
+Using range method to get a range of values between two keys.
 ```go
 results, err := starskey.Range([]byte("key900"), []byte("key980"))
 if err != nil {
@@ -67,6 +72,7 @@ if err != nil {
 ```
 
 ## FilterKeys
+Using filter keys to filter keys based on a function.
 ```go
 compareFunc := func(key []byte) bool {
     // if has prefix "c" return true
@@ -81,6 +87,7 @@ if err != nil {
 
 
 ## Atomic Transactions
+Using atomic transactions to group multiple operations into a single atomic transaction.
 ```go
 txn := starskey.BeginTxn()
 if txn == nil {
@@ -96,6 +103,7 @@ t.Fatalf("Failed to commit transaction: %v", err)
 ```
 
 ## Delete
+Delete a key from starskey.
 ```go
 if err := starskey.Delete([]byte("key")); err != nil {
     t.Fatalf("Failed to delete key: %v", err)
