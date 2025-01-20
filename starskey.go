@@ -518,12 +518,148 @@ func (skey *Starskey) Delete(key []byte) error {
 
 // Range retrieves a range of values from the database
 func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
-	return nil, nil
+	skey.lock.Lock()
+	defer skey.lock.Unlock()
+
+	var result [][]byte
+	seenKeys := make(map[string]struct{})
+
+	// Check memtable first
+	entries := skey.memtable.Range(startKey, endKey)
+	for _, entry := range entries {
+		result = append(result, entry.Value)
+		seenKeys[string(entry.Key)] = struct{}{}
+	}
+
+	// Search through levels
+	for _, level := range skey.levels {
+		for _, sstable := range level.sstables {
+			klog := sstable.klog
+			vlog := sstable.vlog
+
+			it := pager.NewIterator(klog)
+
+			// If bloom is configured skip first page which is the bloom filter
+			if skey.config.BloomFilter {
+				if !it.Next() {
+					continue
+				}
+			}
+
+			for it.Next() {
+				data, err := it.Read()
+				if err != nil {
+					return nil, err
+				}
+				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression)
+				if err != nil {
+					return nil, err
+				}
+
+				if bytes.Compare(klogRecord.Key, startKey) >= 0 && bytes.Compare(klogRecord.Key, endKey) <= 0 {
+					if _, seen := seenKeys[string(klogRecord.Key)]; seen {
+						continue
+					}
+
+					read, _, err := vlog.Read(int(klogRecord.ValPageNum))
+					if err != nil {
+						return nil, err
+					}
+					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression)
+					if err != nil {
+						return nil, err
+					}
+
+					// Check if the value is a tombstone
+					if bytes.Equal(vlogRecord.Value, Tombstone) {
+						continue
+					}
+
+					result = append(result, vlogRecord.Value)
+					seenKeys[string(klogRecord.Key)] = struct{}{}
+				}
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // FilterKeys retrieves values from the database that match a key filter
 func (skey *Starskey) FilterKeys(compare func(key []byte) bool) ([][]byte, error) {
-	return nil, nil
+	skey.lock.Lock()
+	defer skey.lock.Unlock()
+
+	var result [][]byte
+	seenKeys := make(map[string]struct{})
+
+	// Check memtable first
+
+	iter := skey.memtable.NewIterator(false)
+	for iter.Valid() {
+		if entry, ok := iter.Current(); ok {
+			if compare(entry.Key) {
+				result = append(result, entry.Value)
+				seenKeys[string(entry.Key)] = struct{}{}
+			}
+		}
+		if !iter.HasNext() {
+			break
+		}
+		iter.Next()
+	}
+
+	// Search through levels
+	for _, level := range skey.levels {
+		for _, sstable := range level.sstables {
+			klog := sstable.klog
+			vlog := sstable.vlog
+
+			it := pager.NewIterator(klog)
+
+			if skey.config.BloomFilter {
+				if !it.Next() {
+					continue
+				}
+			}
+
+			for it.Next() {
+				data, err := it.Read()
+				if err != nil {
+					return nil, err
+				}
+				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression)
+				if err != nil {
+					return nil, err
+				}
+
+				if compare(klogRecord.Key) {
+					if _, seen := seenKeys[string(klogRecord.Key)]; seen {
+						continue
+					}
+
+					read, _, err := vlog.Read(int(klogRecord.ValPageNum))
+					if err != nil {
+						return nil, err
+					}
+					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression)
+					if err != nil {
+						return nil, err
+					}
+
+					// Check if the value is a tombstone
+					if bytes.Equal(vlogRecord.Value, Tombstone) {
+						continue
+					}
+
+					result = append(result, vlogRecord.Value)
+					seenKeys[string(klogRecord.Key)] = struct{}{}
+				}
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // Close closes the Starskey instance
@@ -779,12 +915,12 @@ func (skey *Starskey) replayWAL() error {
 		return nil
 	}
 
-	// We create a cursor for the write-ahead log
-	cursor := pager.NewIterator(skey.wal)
+	// We create an iter for the write-ahead log
+	iter := pager.NewIterator(skey.wal)
 
 	// We iterate over all records in the write-ahead log
-	for cursor.Next() {
-		data, err := cursor.Read()
+	for iter.Next() {
+		data, err := iter.Read()
 		if err != nil {
 			return err
 		}

@@ -1,7 +1,17 @@
 # starskey
 Starskey is a fast embedded key-value store package for GO!  Starskey implements a multi-level, durable log structured merge tree.
 
-## Example
+## Features
+- **Background compaction**  Compactions occur on writes, if any disk level reaches it's max size half of the sstables are merged into a new sstable and placed into the next level.  This algorithm is recursive until last level.  At last level if full we merge all sstables into a new sstable.
+- **Simple API** with Put, Get, Delete, Range, FilterKeys
+- **Atomic transactions** You can group multiple operations into a single atomic transaction.  If transactions fail they rollback.
+- **Configurable options** - You can configure many options such as max levels, memtable threshold, bloom filter, and more.
+- **WAL with recovery** - Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
+- **Key value separation** - Keys and values are stored separately for sstables.
+- **Bloom filters** - Each sstable has an in memory bloom filter to reduce disk reads.
+- **Fast** up to 400k+ ops per second.
+
+## Basic Example
 ```go
 import (
     "github.com/starskey-io/starskey"
