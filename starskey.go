@@ -23,8 +23,10 @@ import (
 	"github.com/starskey-io/starskey/bloomfilter"
 	"github.com/starskey-io/starskey/pager"
 	"github.com/starskey-io/starskey/ttree"
+	"go.mongodb.org/mongo-driver/bson" // It's fast and simple for our use case
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -129,12 +131,14 @@ type TxnOperation struct {
 	commited bool // Transaction status
 }
 
+// TxnRollbackOperation represents a rollback operation in a transaction
 type TxnRollbackOperation struct {
 	key   []byte        // Key
 	value []byte        // Value
 	op    OperationType // Operation type
 }
 
+// Open opens a new Starskey instance with the given configuration
 func Open(config *Config) (*Starskey, error) {
 	// Check if config is nil
 	if config == nil {
@@ -264,31 +268,249 @@ func (skey *Starskey) FilterKeys(compare func(key []byte) bool) ([][]byte, error
 }
 
 func (skey *Starskey) Close() error {
+	log.Println("Closing WAL")
+	// Close the write-ahead log
+	if err := skey.wal.Close(); err != nil {
+		return err
+	}
+
+	log.Println("Closed WAL")
+
+	log.Println("Closing levels")
+
+	for _, level := range skey.levels {
+		log.Println("Closing level", level.id)
+		for _, sstable := range level.sstables {
+			if err := sstable.klog.Close(); err != nil {
+				return err
+			}
+			if err := sstable.vlog.Close(); err != nil {
+				return err
+			}
+		}
+
+		log.Println("Level", level.id, "closed")
+	}
+
+	log.Println("Levels closed")
+
+	log.Println("Starskey closed")
+
+	if skey.logFile != nil {
+		if err := skey.logFile.Close(); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
 
+// serializeWalRecord serializes a WAL record
 func serializeWalRecord(record *WALRecord) ([]byte, error) {
-	return nil, nil
+	data, err := bson.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
+// deserializeWalRecord deserializes a WAL record
 func deserializeWalRecord(data []byte) (*WALRecord, error) {
-	return nil, nil
+	var record WALRecord
+	err := bson.Unmarshal(data, &record)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
+// serializeKLogRecord serializes a key log record
 func serializeKLogRecord(record *KLogRecord) ([]byte, error) {
-	return nil, nil
+	data, err := bson.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
+// deserializeKLogRecord deserializes a key log record
 func deserializeKLogRecord(data []byte) (*KLogRecord, error) {
-	return nil, nil
+	var record KLogRecord
+	err := bson.Unmarshal(data, &record)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
+// serializeVLogRecord serializes a value log record
 func serializeVLogRecord(record *VLogRecord) ([]byte, error) {
-	return nil, nil
+	data, err := bson.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
+// deserializeVLogRecord deserializes a value log record
 func deserializeVLogRecord(data []byte) (*VLogRecord, error) {
-	return nil, nil
+	var record VLogRecord
+	err := bson.Unmarshal(data, &record)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
 
+}
+
+// openLevels opens disk levels and their SSTables and returns a slice of Level
+func openLevels(config *Config) ([]*Level, error) {
+	levels := make([]*Level, config.MaxLevel) // We create a slice of levels
+
+	// We iterate over the number of levels
+	for i := 0; i < int(config.MaxLevel); i++ {
+		// We create level
+		levels[i] = &Level{
+			id:         i + 1,
+			sstables:   make([]*SSTable, 0),
+			maxSize:    int(config.FlushThreshold) * int(config.SizeFactor) * (1 << uint(i)), // Size increases exponentially
+			sizeFactor: int(config.SizeFactor),                                               // Size factor
+		}
+
+		// Open the SSTables
+		sstables, err := openSSTables(fmt.Sprintf("%s%s%d", config.Directory, LevelPrefix, i+1), config.BloomFilter)
+		if err != nil {
+			return nil, err
+		}
+
+		// Set the SSTables
+		levels[i].sstables = sstables
+
+		// Log that sh
+		log.Println("Level", i+1, "opened successfully")
+
+	}
+
+	return levels, nil
+}
+
+// openSSTables opens SSTables in a directory and returns a slice of SSTable
+func openSSTables(directory string, bf bool) ([]*SSTable, error) {
+	log.Println("Opening SSTables for level", directory)
+	sstables := make([]*SSTable, 0)
+
+	// We check if configured directory ends with a slash
+	if string(directory[len(directory)-1]) != string(os.PathSeparator) {
+		directory += string(os.PathSeparator)
+	}
+
+	// We create or the configured directory
+	if err := os.MkdirAll(directory, os.ModePerm); err != nil {
+		return nil, err
+	}
+
+	// We read all files in the directory
+	files, err := os.ReadDir(directory)
+	if err != nil {
+		return nil, err
+	}
+
+	// We iterate over all files in the directory
+	for _, file := range files {
+		// If the file starts with the SST prefix there will be a key log and a value log
+		if file.IsDir() {
+			continue
+		}
+
+		if strings.HasPrefix(file.Name(), SSTPrefix) {
+
+			if strings.HasSuffix(file.Name(), KLogExtension) {
+				// Open the key log
+				klogPath := fmt.Sprintf("%s%s", directory, file.Name())
+				log.Println("Opening SSTable klog", klogPath)
+				klog, err := pager.Open(klogPath, os.O_CREATE|os.O_RDWR, os.ModePerm, PageSize, true, SyncInterval)
+				if err != nil {
+					return nil, err
+				}
+
+				// Open the value log for the key log
+				vlogPath := strings.TrimRight(klogPath, KLogExtension) + VLogExtension
+				log.Println("Opening SSTable vlog", vlogPath)
+				vlog, err := pager.Open(vlogPath, os.O_CREATE|os.O_RDWR, os.ModePerm, PageSize, true, SyncInterval)
+				if err != nil {
+					return nil, err
+				}
+
+				sst := &SSTable{
+					klog: klog,
+					vlog: vlog,
+				}
+
+				if bf {
+					log.Println("Opening bloom filter for SSTable", strings.TrimRight(klogPath, KLogExtension)+BloomFilterExtension)
+					bloomFilterFile, err := os.ReadFile(strings.TrimRight(klogPath, KLogExtension) + BloomFilterExtension)
+					if err != nil {
+						return nil, err
+					}
+
+					deserializedBf, err := bloomfilter.Deserialize(bloomFilterFile)
+					if err != nil {
+						return nil, err
+					}
+
+					sst.bloomfilter = deserializedBf
+					log.Println("Bloom filter opened successfully for SSTable")
+				}
+
+				// Append the SSTable to the list
+				sstables = append(sstables, sst)
+			}
+		}
+
+	}
+
+	return sstables, nil
+}
+
+// replayWal replays write ahead log and rebuilds the last memtable state
+func (skey *Starskey) replayWAL() error {
+
+	if skey.wal.PageCount() == 0 {
+		log.Println("No records in WAL to replay")
+		return nil
+	}
+
+	// We create a cursor for the write-ahead log
+	cursor := pager.NewIterator(skey.wal)
+
+	// We iterate over all records in the write-ahead log
+	for cursor.Next() {
+		data, err := cursor.Read()
+		if err != nil {
+			return err
+		}
+
+		// Deserialize the WAL record
+		record, err := deserializeWalRecord(data)
+		if err != nil {
+			return err
+		}
+
+		// We apply the operation in the WAL record
+		switch record.Op {
+		case Put:
+			err = skey.memtable.Put(record.Key, record.Value)
+			if err != nil {
+				return err
+			}
+		case Delete:
+			err = skey.memtable.Put(record.Key, Tombstone)
+			if err != nil {
+				return err
+			}
+		}
+
+	}
+
+	return nil
 }
