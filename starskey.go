@@ -18,6 +18,7 @@
 package starskey
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/starskey-io/starskey/bloomfilter"
@@ -247,14 +248,118 @@ func (txn *Txn) Rollback() error {
 }
 
 func (skey *Starskey) Put(key, value []byte) error {
+	// Lock for thread safety
+	skey.lock.Lock()
+	defer skey.lock.Unlock()
 
+	// Create a WAL record
+	record := &WALRecord{
+		Key:   key,
+		Value: value,
+		Op:    Put,
+	}
+
+	// Serialize the WAL record
+	walSerialized, err := serializeWalRecord(record)
+	if err != nil {
+		return err
+	}
+
+	// Write the WAL record to the write-ahead log
+	if _, err := skey.wal.Write(walSerialized); err != nil {
+		return err
+	}
+
+	// Put the key-value pair into the memtable
+	err = skey.memtable.Put(key, value)
+	if err != nil {
+		return err
+	}
+
+	if skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
+		// Sorted run to level 1
+		if err := skey.run(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
+// Get retrieves a key from the database
 func (skey *Starskey) Get(key []byte) ([]byte, error) {
+	// Lock for thread safety
+	skey.lock.Lock()
+	defer skey.lock.Unlock()
+
+	// Check memtable first
+	if value, exists := skey.memtable.Get(key); exists {
+		// Check for tombstone
+		if bytes.Equal(value.Value, Tombstone) {
+			return nil, nil
+		}
+
+		return value.Value, nil
+	}
+
+	// Search through levels
+	for _, level := range skey.levels {
+		for _, sstable := range level.sstables {
+			if sstable == nil {
+				continue
+			}
+			klog := sstable.klog
+			vlog := sstable.vlog
+
+			// Create a new iterator for the key log
+			it := pager.NewIterator(klog)
+
+			// If bloom filter is configured we check if key is in the bloom filter
+			if skey.config.BloomFilter {
+				// We check in-memory bloom filter first
+				if !sstable.bloomfilter.Contains(key) {
+					continue
+				}
+			}
+
+			for it.Next() {
+				data, err := it.Read()
+				if err != nil {
+					break
+				}
+				klogRecord, err := deserializeKLogRecord(data)
+				if err != nil {
+					return nil, err
+				}
+
+				if bytes.Equal(klogRecord.Key, key) {
+					// We found the key
+					// We read the value from the value log
+					read, _, err := vlog.Read(int(klogRecord.ValPageNum))
+					if err != nil {
+						return nil, err
+					}
+					vlogRecord, err := deserializeVLogRecord(read)
+					if err != nil {
+						return nil, err
+					}
+
+					// Check if the value is a tombstone
+					if bytes.Equal(vlogRecord.Value, Tombstone) {
+						return nil, nil
+					}
+
+					return vlogRecord.Value, nil
+				}
+
+			}
+		}
+
+	}
+
 	return nil, nil
 }
 
+// Delete deletes a key from the database
 func (skey *Starskey) Delete(key []byte) error {
 	return nil
 }
@@ -510,6 +615,543 @@ func (skey *Starskey) replayWAL() error {
 			}
 		}
 
+	}
+
+	return nil
+}
+
+// run runs a sorted flush to disk level 1
+func (skey *Starskey) run() error {
+	log.Println("Running sorted run to l1")
+	// Create a new SSTable
+	sstable := &SSTable{
+		klog: nil,
+		vlog: nil,
+	}
+
+	ti := time.Now()
+	// Create a new key log
+	klog, err := pager.Open(fmt.Sprintf("%sl1%s%s_%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), KLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	if err != nil {
+		return err
+	}
+
+	// Create a new value log
+	vlog, err := pager.Open(fmt.Sprintf("%sl1%s%s_%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), VLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	if err != nil {
+		_ = klog.Close()
+		_ = os.Remove(klog.Name())
+		return err
+	}
+
+	var bloomFilterFile *os.File
+
+	// If bloom is enabled we create bloom filter and write it to page 0 on klog
+	if skey.config.BloomFilter {
+		bloomFilterFile, err = os.OpenFile(fmt.Sprintf("%sl1%s%s_%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), BloomFilterExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission)
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return err
+		}
+		// We get a count of entries in the memtable
+		mtCount := uint(skey.memtable.CountEntries())
+
+		log.Printf("Creating bloom filter for run with %d entries\n", mtCount)
+
+		bf := bloomfilter.New(mtCount, BloomFilterProbability)
+		iter := skey.memtable.NewIterator(false)
+		for iter.Valid() {
+			if entry, ok := iter.Current(); ok {
+				bf.Add(entry.Key)
+			}
+
+			if !iter.HasNext() {
+				break
+			}
+
+			iter.Next()
+
+		}
+
+		serializedBf, err := bf.Serialize()
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			_ = bloomFilterFile.Close()
+			_ = os.Remove(bloomFilterFile.Name())
+			return err
+		}
+
+		_, err = bloomFilterFile.Write(serializedBf)
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			_ = bloomFilterFile.Close()
+			_ = os.Remove(bloomFilterFile.Name())
+			return err
+		}
+		_ = bloomFilterFile.Close()
+
+		sstable.bloomfilter = bf
+
+		log.Println("Bloom filter created for sstable")
+
+	}
+
+	iter := skey.memtable.NewIterator(false)
+	for iter.Valid() {
+		if entry, ok := iter.Current(); ok {
+			// We create the vlog record first and get the page
+			vlogRecord := &VLogRecord{
+				Value: entry.Value,
+			}
+
+			vlogSerialized, err := serializeVLogRecord(vlogRecord)
+			if err != nil {
+				_ = klog.Close()
+				_ = vlog.Close()
+				_ = os.Remove(klog.Name())
+				_ = os.Remove(vlog.Name())
+				if skey.config.BloomFilter {
+					_ = os.Remove(bloomFilterFile.Name())
+				}
+				return err
+			}
+
+			// Write the vlog record to the value log
+			pg, err := vlog.Write(vlogSerialized)
+			if err != nil {
+				_ = klog.Close()
+				_ = vlog.Close()
+				_ = os.Remove(klog.Name())
+				_ = os.Remove(vlog.Name())
+				if skey.config.BloomFilter {
+					_ = os.Remove(bloomFilterFile.Name())
+				}
+				return err
+			}
+
+			// We create the klog record
+			klogRecord := &KLogRecord{
+				Key:        entry.Key,
+				ValPageNum: uint64(pg),
+			}
+
+			klogSerialized, err := serializeKLogRecord(klogRecord)
+			if err != nil {
+				_ = klog.Close()
+				_ = vlog.Close()
+				_ = os.Remove(klog.Name())
+				_ = os.Remove(vlog.Name())
+				if skey.config.BloomFilter {
+					_ = os.Remove(bloomFilterFile.Name())
+				}
+				return err
+			}
+
+			// Write the klog record to the key log
+			_, err = klog.Write(klogSerialized)
+			if err != nil {
+				_ = klog.Close()
+				_ = vlog.Close()
+				_ = os.Remove(klog.Name())
+				_ = os.Remove(vlog.Name())
+				if skey.config.BloomFilter {
+					_ = os.Remove(bloomFilterFile.Name())
+				}
+				return err
+			}
+
+		}
+		if !iter.HasNext() {
+			break
+		}
+		iter.Next()
+	}
+
+	// Set the key log and value log
+	sstable.klog = klog
+	sstable.vlog = vlog
+
+	// Clear the memtable
+	skey.memtable = ttree.New(TTreeMin, TTreeMax)
+
+	log.Println("Memtable cleared")
+
+	// We truncate the write-ahead log
+	if err := skey.wal.Truncate(); err != nil {
+		_ = klog.Close()
+		_ = vlog.Close()
+		_ = os.Remove(klog.Name())
+		_ = os.Remove(vlog.Name())
+		if skey.config.BloomFilter {
+			_ = os.Remove(bloomFilterFile.Name())
+		}
+		return err
+	}
+
+	// Append the SSTable to the first level
+	skey.levels[0].sstables = append(skey.levels[0].sstables, sstable)
+
+	log.Println("Write-ahead log truncated")
+
+	log.Println("Sorted run to l1 completed successfully")
+
+	// Check if compaction is needed
+	if skey.levels[0].shouldCompact() {
+		if err := skey.compact(0); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// compact compacts a level
+func (skey *Starskey) compact(level int) error {
+	log.Println("Compacting level", level)
+	// Ensure we do not go beyond the last level
+	if level >= len(skey.levels)-1 {
+		// Handle the case when the last level is full
+		if skey.levels[level].shouldCompact() {
+			// Merge all SSTables in the last level
+			mergedTable := skey.mergeTables(skey.levels[level].sstables, level)
+			if skey.config.BloomFilter {
+				// Create a new bloom filter for the merged table
+				if err := mergedTable.createBloomFilter(); err != nil {
+					return err
+				}
+			}
+			// Replace the SSTables in the last level with the merged table
+			skey.levels[level].sstables = []*SSTable{mergedTable}
+			log.Println("Compaction of last level completed successfully")
+		}
+		return nil
+	}
+
+	// There should be at least a minimum of 2 SSTables to compact
+	if len(skey.levels[level].sstables) < 2 {
+		return nil
+
+	}
+
+	// Select subset of tables for partial compaction
+	numTablesToCompact := len(skey.levels[level].sstables) / 2
+	tablesToCompact := skey.levels[level].sstables[:numTablesToCompact]
+
+	// Merge selected tables
+	mergedTable := skey.mergeTables(tablesToCompact, level)
+
+	if skey.config.BloomFilter {
+		// Create a new bloom filter for the merged table
+		if err := mergedTable.createBloomFilter(); err != nil {
+			return err
+		}
+	}
+
+	// Move merged table to next level
+	nextLevel := skey.levels[level+1]
+	nextLevel.sstables = append(nextLevel.sstables, mergedTable)
+
+	// Remove compacted tables from current level
+	skey.levels[level].sstables = skey.levels[level].sstables[numTablesToCompact:]
+
+	log.Println("Compaction of level", level, "completed successfully")
+
+	// Recursively check next level
+	if nextLevel.shouldCompact() {
+		return skey.compact(level + 1)
+
+	}
+
+	return nil
+}
+
+// shouldCompact checks if a level should be compacted
+func (lvl *Level) shouldCompact() bool {
+	// we check if accumulated size of all SSTables in the level is greater than the maximum size
+	size := int64(0)
+	for _, sstable := range lvl.sstables {
+		if sstable == nil {
+			continue
+		}
+		size += sstable.klog.Size() + sstable.vlog.Size()
+	}
+
+	return size >= int64(lvl.maxSize)
+}
+
+// iteratorWithData pairs with mergeTables method
+type iteratorWithData struct {
+	iterator *pager.Iterator
+	hasMore  bool
+	current  *KLogRecord
+}
+
+// mergeTables merges SSTables and returns a new SSTable
+// removes tombstones and sorts the keys
+func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
+	log.Println("Starting merge operation of tables:")
+	for _, tbl := range tables {
+		log.Println(tbl.klog.Name(), tbl.vlog.Name())
+	}
+
+	if len(tables) == 0 {
+		return nil
+	}
+
+	// Create a new SSTable
+	sstable := &SSTable{
+		klog: nil,
+		vlog: nil,
+	}
+
+	ti := time.Now()
+
+	// Create a new key log
+	klog, err := pager.Open(fmt.Sprintf("%sl%d%s%s_%d%s", skey.config.Directory, level+1, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), KLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	if err != nil {
+		return nil
+	}
+
+	// Create a new value log
+	vlog, err := pager.Open(fmt.Sprintf("%sl%d%s%s_%d%s", skey.config.Directory, level+1, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), VLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	if err != nil {
+		_ = klog.Close()
+		_ = os.Remove(klog.Name())
+		return nil
+	}
+
+	sstable.klog = klog
+	sstable.vlog = vlog
+
+	// Initialize all iterators with their first values
+	iterators := make([]*iteratorWithData, len(tables))
+	for i, tbl := range tables {
+		it := pager.NewIterator(tbl.klog)
+
+		hasMore := it.Next()
+		var current *KLogRecord
+		if hasMore {
+			deserializedKLogRecord, err := deserializeKLogRecord(it.CurrentData)
+			if err != nil {
+				_ = klog.Close()
+				_ = vlog.Close()
+				_ = os.Remove(klog.Name())
+				_ = os.Remove(vlog.Name())
+				return nil
+			}
+			current = deserializedKLogRecord
+		}
+		iterators[i] = &iteratorWithData{
+			iterator: it,
+			hasMore:  hasMore,
+			current:  current,
+		}
+	}
+
+	for {
+		// Find smallest key among all active iterators
+		smallestIdx := -1
+		for i, it := range iterators {
+			if !it.hasMore {
+				continue
+			}
+
+			if smallestIdx == -1 || bytes.Compare(it.current.Key, iterators[smallestIdx].current.Key) < 0 {
+				smallestIdx = i
+			}
+		}
+
+		// If no active iterators left, we're done
+		if smallestIdx == -1 {
+			break
+		}
+
+		// Write smallest value to destination
+		// We must read the value from the value log
+		read, _, err := tables[smallestIdx].vlog.Read(int(iterators[smallestIdx].current.ValPageNum))
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return nil
+		}
+
+		vlogRecord, err := deserializeVLogRecord(read)
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return nil
+		}
+
+		if bytes.Equal(vlogRecord.Value, Tombstone) {
+			// We skip the tombstone
+			iterators[smallestIdx].hasMore = iterators[smallestIdx].iterator.Next()
+			if iterators[smallestIdx].hasMore {
+				deserializedKLogRecord, err := deserializeKLogRecord(iterators[smallestIdx].iterator.CurrentData)
+				if err != nil {
+					_ = klog.Close()
+					_ = vlog.Close()
+					_ = os.Remove(klog.Name())
+					_ = os.Remove(vlog.Name())
+					return nil
+				}
+				iterators[smallestIdx].current = deserializedKLogRecord
+			}
+			continue
+		}
+
+		// Then we write it to new value log
+		vlogRecordSerialized, err := serializeVLogRecord(vlogRecord)
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return nil
+		}
+
+		pg, err := vlog.Write(vlogRecordSerialized)
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return nil
+		}
+
+		// We create the klog record
+		klogRecord := &KLogRecord{
+			Key:        iterators[smallestIdx].current.Key,
+			ValPageNum: uint64(pg),
+		}
+
+		klogRecordSerialized, err := serializeKLogRecord(klogRecord)
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return nil
+		}
+
+		// Write the klog record to the key log
+		_, err = klog.Write(klogRecordSerialized)
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return nil
+		}
+
+		// Advance the iterator we just used
+		it := iterators[smallestIdx]
+
+		it.hasMore = it.iterator.Next()
+		if it.hasMore {
+			deserializedKLogRecord, err := deserializeKLogRecord(it.iterator.CurrentData)
+			if err != nil {
+				_ = klog.Close()
+				_ = vlog.Close()
+				_ = os.Remove(klog.Name())
+				_ = os.Remove(vlog.Name())
+				return nil
+			}
+			it.current = deserializedKLogRecord
+
+		}
+	}
+
+	// Close all old SSTables
+	for _, tbl := range tables {
+		if err := tbl.klog.Close(); err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return nil
+		}
+		if err := tbl.vlog.Close(); err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return nil
+		}
+	}
+
+	// Remove all old SSTables
+	for _, tbl := range tables {
+		if err := os.Remove(tbl.klog.Name()); err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return nil
+		}
+		if err := os.Remove(tbl.vlog.Name()); err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return nil
+		}
+	}
+
+	log.Println("Merge operation of tables completed successfully with new output table: ", sstable.klog.Name(), sstable.vlog.Name())
+
+	return sstable
+}
+
+// createBloomFilter creates a bloom filter for the SSTable
+func (sst *SSTable) createBloomFilter() error {
+
+	sst.bloomfilter = bloomfilter.New(uint(sst.klog.PageCount()), BloomFilterProbability)
+
+	// Open the bloom filter file
+	bfFile, err := os.OpenFile(fmt.Sprintf("%s%s", strings.TrimSuffix(sst.klog.Name(), KLogExtension), BloomFilterExtension), os.O_CREATE|os.O_RDWR, os.ModePerm)
+	if err != nil {
+		return err
+	}
+
+	// We create an iterator for the key log
+	iter := pager.NewIterator(sst.klog)
+	for iter.Next() {
+		data, err := iter.Read()
+		if err != nil {
+			break
+		}
+		klogRecord, err := deserializeKLogRecord(data)
+		if err != nil {
+			return err
+		}
+
+		// We add the key to the bloom filter
+		sst.bloomfilter.Add(klogRecord.Key)
+	}
+
+	// We serialize the bloom filter
+	serializedBf, err := sst.bloomfilter.Serialize()
+	if err != nil {
+		return err
+	}
+
+	// Write the serialized bloom filter to the file
+	_, err = bfFile.Write(serializedBf)
+	if err != nil {
+		return err
 	}
 
 	return nil

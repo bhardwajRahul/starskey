@@ -18,6 +18,8 @@
 package starskey
 
 import (
+	"fmt"
+	"log"
 	"os"
 	"reflect"
 	"testing"
@@ -120,4 +122,61 @@ func TestOpen(t *testing.T) {
 	if err := starskey.Close(); err != nil {
 		t.Fatalf("Failed to close starskey: %v", err)
 	}
+}
+
+func TestLSMTree_Put(t *testing.T) {
+	os.RemoveAll("test")
+	defer os.RemoveAll("test")
+
+	// Define a valid configuration
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+		Logging:        false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	size := 0
+
+	for i := 0; i < 2000; i++ {
+		key := []byte(fmt.Sprintf("key%03d", i))
+		value := []byte(fmt.Sprintf("value%03d", i))
+
+		if err := starskey.Put(key, value); err != nil {
+			t.Fatalf("Failed to put key-value pair: %v", err)
+		}
+
+		size += len(key) + len(value)
+
+	}
+
+	for i := 0; i < 2000; i++ {
+		key := []byte(fmt.Sprintf("key%03d", i))
+		value := []byte(fmt.Sprintf("value%03d", i))
+
+		val, err := starskey.Get(key)
+		if err != nil {
+			t.Fatalf("Failed to get key-value pair: %v", err)
+		}
+
+		if !reflect.DeepEqual(val, value) {
+			t.Fatalf("Value does not match expected value")
+		}
+
+	}
+
+	log.Println(size)
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+
 }
