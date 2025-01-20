@@ -1,2 +1,3 @@
 # starskey
-Package for fast embedded key-value storage. LevelDB-WiscKey inspired.
+Starskey is a fast embedded key-value store package for GO!  Starskey implements a multi-level, durable log structured merge tree.
+
