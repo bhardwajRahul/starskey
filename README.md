@@ -1,5 +1,5 @@
 <div>
-    <h1 align="left"><img width="128" src="artwork/starskey_logo.png"></h1>
+    <h1 align="left"><img width="256" src="artwork/starskey_logo.png"></h1>
 </div>
 
 Starskey is a fast embedded key-value store package for GO!  Starskey implements a multi-level, durable log structured merge tree.
