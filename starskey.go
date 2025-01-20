@@ -18,14 +18,18 @@
 package starskey
 
 import (
+	"errors"
+	"fmt"
 	"github.com/starskey-io/starskey/bloomfilter"
 	"github.com/starskey-io/starskey/pager"
 	"github.com/starskey-io/starskey/ttree"
+	"log"
 	"os"
 	"sync"
 	"time"
 )
 
+// Global variables
 var (
 	WALExtension           = ".wal"                         // Write ahead log extension
 	VLogExtension          = ".vlog"                        // value log extension
@@ -42,10 +46,10 @@ var (
 	BloomFilterProbability = 0.01                           // Bloom filter probability
 )
 
-// Config represents the configuration for the LSM tree
+// Config represents the configuration for starskey instance
 type Config struct {
 	Permission     os.FileMode // Directory and file permissions
-	Directory      string      // Directory to store the LSM tree files
+	Directory      string      // Directory to store the starskey files
 	FlushThreshold uint64      // Flush threshold for memtable
 	MaxLevel       uint64      // Maximum number of levels
 	SizeFactor     uint64      // Size factor for each level
@@ -53,7 +57,7 @@ type Config struct {
 	Logging        bool        // Enable log file
 }
 
-// Level represents a level in the LSM tree
+// Level represents a disk level
 type Level struct {
 	id         int        // Level number
 	sstables   []*SSTable // SSTables in the level
@@ -104,7 +108,7 @@ type Starskey struct {
 	wal      *pager.Pager // Write-ahead log
 	memtable *ttree.TTree // Memtable
 	levels   []*Level     // Disk levels
-	config   *Config      // lsm tree configuration
+	config   *Config      // Starskey configuration
 	lock     *sync.Mutex  // Mutex for thread safety
 	logFile  *os.File     // Debug log file
 }
@@ -132,7 +136,90 @@ type TxnRollbackOperation struct {
 }
 
 func Open(config *Config) (*Starskey, error) {
-	return nil, nil
+	// Check if config is nil
+	if config == nil {
+		return nil, errors.New("config cannot be nil")
+	}
+
+	// Create new starskey instance
+	skey := &Starskey{
+		config: config,
+	}
+
+	// We check if configured directory ends with a slash
+	if string(config.Directory[len(config.Directory)-1]) != string(os.PathSeparator) {
+		config.Directory += string(os.PathSeparator)
+	}
+
+	// We create or the configured directory
+	if err := os.MkdirAll(config.Directory, config.Permission); err != nil {
+		return nil, err
+	}
+
+	// We check if logging is configured,
+	// if so we log to file instead of standard output
+	if skey.config.Logging {
+		logFile, err := os.OpenFile(fmt.Sprintf("%s%s", skey.config.Directory, LogExtension), os.O_CREATE|os.O_APPEND|os.O_WRONLY, os.ModePerm)
+		if err != nil {
+			return nil, err
+		}
+		log.SetOutput(logFile)
+		skey.logFile = logFile
+	}
+
+	// We log the configuration
+	log.Println("Opening Starskey with config:")
+	log.Println("Directory:      ", config.Directory)
+	log.Println("FlushThreshold: ", config.FlushThreshold)
+	log.Println("MaxLevel:       ", config.MaxLevel)
+	log.Println("SizeFactor:     ", config.SizeFactor)
+	log.Println("BloomFilter:    ", config.BloomFilter)
+	log.Println("Logging:        ", config.Logging)
+
+	log.Println("Opening write ahead log")
+
+	// We create/open the write-ahead log within the configured directory
+	walPath := config.Directory + WALExtension
+	wal, err := pager.Open(walPath, os.O_RDWR|os.O_CREATE, config.Permission, PageSize, true, SyncInterval)
+	if err != nil {
+		return nil, err
+	}
+
+	// We set the write-ahead log
+	skey.wal = wal
+
+	log.Println("Write-ahead log opened successfully")
+
+	log.Println("Creating memory table")
+
+	// We create the memtable
+	skey.memtable = ttree.New(TTreeMin, TTreeMax)
+
+	log.Println("Memory table created successfully")
+
+	log.Println("Opening levels")
+	// We create the levels
+	skey.levels, err = openLevels(config)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Println("Levels opened successfully")
+
+	skey.lock = &sync.Mutex{}
+
+	log.Println("Replaying WAL")
+
+	// We replay the write-ahead log
+	if err = skey.replayWAL(); err != nil {
+		return nil, err
+	}
+
+	log.Println("WAL replayed successfully")
+
+	log.Println("Starskey opened successfully")
+
+	return skey, nil
 }
 
 func (skey *Starskey) BeginTxn() *Txn {
