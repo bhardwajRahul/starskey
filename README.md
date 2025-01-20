@@ -91,14 +91,14 @@ Using atomic transactions to group multiple operations into a single atomic tran
 ```go
 txn := starskey.BeginTxn()
 if txn == nil {
-t.Fatalf("Failed to begin transaction")
+    t.Fatalf("Failed to begin transaction")
 }
 
 txn.Put([]byte("key"), []byte("value"))
 // or txn.Delete([]byte("key"))
 
 if err := txn.Commit(); err != nil {
-t.Fatalf("Failed to commit transaction: %v", err)
+    t.Fatalf("Failed to commit transaction: %v", err)
 }
 ```
 
