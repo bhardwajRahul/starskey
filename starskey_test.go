@@ -199,8 +199,10 @@ func TestOpen(t *testing.T) {
 }
 
 func TestStarskey_Put(t *testing.T) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	// Define a valid configuration
 	config := &Config{
@@ -256,8 +258,10 @@ func TestStarskey_Put(t *testing.T) {
 }
 
 func TestStarskey_BeginTxn(t *testing.T) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	// Define a valid configuration
 	config := &Config{
@@ -304,8 +308,10 @@ func TestStarskey_BeginTxn(t *testing.T) {
 }
 
 func TestStarskey_Reopen(t *testing.T) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	// Define a valid configuration
 	config := &Config{
@@ -368,8 +374,10 @@ func TestStarskey_Reopen(t *testing.T) {
 }
 
 func TestStarskey_Put_Bloom(t *testing.T) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	config := &Config{
 		Permission:     0755,
@@ -423,8 +431,10 @@ func TestStarskey_Put_Bloom(t *testing.T) {
 }
 
 func TestStarskey_Bloom_Reopen(t *testing.T) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	// Define a valid configuration
 	config := &Config{
@@ -487,8 +497,10 @@ func TestStarskey_Bloom_Reopen(t *testing.T) {
 }
 
 func TestStarskey_FilterKeys(t *testing.T) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	config := &Config{
 		Permission:     0755,
@@ -574,8 +586,10 @@ func TestStarskey_FilterKeys(t *testing.T) {
 }
 
 func TestStarskey_Range(t *testing.T) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	config := &Config{
 		Permission:     0755,
@@ -627,8 +641,10 @@ func TestStarskey_Range(t *testing.T) {
 }
 
 func TestStarskey_Delete(t *testing.T) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	config := &Config{
 		Permission:     0755,
@@ -682,8 +698,10 @@ func TestStarskey_Delete(t *testing.T) {
 }
 
 func BenchmarkStarskey_Put(b *testing.B) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	config := &Config{
 		Permission:     0755,
@@ -712,8 +730,10 @@ func BenchmarkStarskey_Put(b *testing.B) {
 }
 
 func BenchmarkStarskey_Get(b *testing.B) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	config := &Config{
 		Permission:     0755,
@@ -749,8 +769,10 @@ func BenchmarkStarskey_Get(b *testing.B) {
 }
 
 func BenchmarkStarskey_Delete(b *testing.B) {
-	os.RemoveAll("test")
-	defer os.RemoveAll("test")
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
 
 	config := &Config{
 		Permission:     0755,
