@@ -24,8 +24,6 @@ import (
     "github.com/starskey-io/starskey"
 )
 
-
-// Test opening starskey with a valid configuration
 starskey, err := Open(&Config{
         Permission:     0755,           // Dir, file permission
         Directory:      "test",         // Directory to store data
