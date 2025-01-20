@@ -5,9 +5,9 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 - **Background compaction**  Compactions occur on writes, if any disk level reaches it's max size half of the sstables are merged into a new sstable and placed into the next level.  This algorithm is recursive until last level.  At last level if full we merge all sstables into a new sstable.
 - **Simple API** with Put, Get, Delete, Range, FilterKeys
 - **Atomic transactions** You can group multiple operations into a single atomic transaction.  If transactions fail they rollback.
-- **Configurable options** - You can configure many options such as max levels, memtable threshold, bloom filter, and more.
-- **WAL with recovery** - Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
-- **Key value separation** - Keys and values are stored separately for sstables.
+- **Configurable options** You can configure many options such as max levels, memtable threshold, bloom filter, and more.
+- **WAL with recovery** Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
+- **Key value separation** Keys and values are stored separately for sstables.
 - **Bloom filters** - Each sstable has an in memory bloom filter to reduce disk reads.
 - **Fast** up to 400k+ ops per second.
 
@@ -56,4 +56,48 @@ if v == nil {
 }
 
 fmt.Println(string(key), string(v))
+```
+
+## Range
+```go
+results, err := starskey.Range([]byte("key900"), []byte("key980"))
+if err != nil {
+    t.Fatalf("Failed to range: %v", err)
+}
+```
+
+## FilterKeys
+```go
+compareFunc := func(key []byte) bool {
+    // if has prefix "c" return true
+    return bytes.HasPrefix(key, []byte("c"))
+}
+
+results, err := starskey.FilterKeys(compareFunc)
+if err != nil {
+    t.Fatalf("Failed to filter: %v", err)
+}
+```
+
+
+## Atomic Transactions
+```go
+txn := starskey.BeginTxn()
+if txn == nil {
+t.Fatalf("Failed to begin transaction")
+}
+
+txn.Put([]byte("key"), []byte("value"))
+// or txn.Delete([]byte("key"))
+
+if err := txn.Commit(); err != nil {
+t.Fatalf("Failed to commit transaction: %v", err)
+}
+```
+
+## Delete
+```go
+if err := starskey.Delete([]byte("key")); err != nil {
+    t.Fatalf("Failed to delete key: %v", err)
+}
 ```
