@@ -16,3 +16,161 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 package pager
+
+import (
+	"log"
+	"os"
+	"testing"
+	"time"
+)
+
+func TestOpen(t *testing.T) {
+	defer os.Remove("test.bin")
+	p, err := Open("test.bin", os.O_CREATE|os.O_RDWR, 0777, 1024, true, time.Millisecond*128)
+	if err != nil {
+		t.Errorf("Error opening file: %v", err)
+	}
+
+	// Close
+	if err := p.Close(); err != nil {
+		t.Errorf("Error closing file: %v", err)
+	}
+}
+
+func TestChunk(t *testing.T) {
+	data := []byte("hello world")
+	chunks, err := chunk(data, 5)
+	if err != nil {
+		t.Errorf("Error chunking data: %v", err)
+
+	}
+	for i, c := range chunks {
+		t.Logf("Chunk %d: %s", i, string(c))
+
+	}
+	if len(chunks) != 4 {
+		t.Errorf("Expected 2 chunks, got %d", len(chunks))
+	}
+}
+
+func TestPager_Write(t *testing.T) {
+	defer os.Remove("test.bin")
+	p, err := Open("test.bin", os.O_CREATE|os.O_RDWR, 0777, 4, true, time.Millisecond*128)
+	if err != nil {
+		t.Errorf("Error opening file: %v", err)
+	}
+
+	defer p.Close()
+
+	pg, err := p.Write([]byte("hello world"))
+	if err != nil {
+		t.Errorf("Error writing to file: %v", err)
+	}
+
+	// Expect page 0 initially
+	if pg != 0 {
+		t.Errorf("Expected page 0, got %d", pg)
+	}
+
+	pg, err = p.Write([]byte("hello world"))
+	if err != nil {
+		t.Errorf("Error writing to file: %v", err)
+	}
+
+	// Expect page 4
+	if pg != 4 {
+		t.Errorf("Expected page 0, got %d", pg)
+	}
+}
+
+func TestPager_Read(t *testing.T) {
+	defer os.Remove("test.bin")
+	p, err := Open("test.bin", os.O_CREATE|os.O_RDWR, 0777, 4, true, time.Millisecond*128)
+	if err != nil {
+		t.Errorf("Error opening file: %v", err)
+	}
+
+	defer p.Close()
+
+	pg, err := p.Write([]byte("hello world"))
+	if err != nil {
+		t.Errorf("Error writing to file: %v", err)
+	}
+
+	log.Println(pg)
+
+	pg, err = p.Write([]byte("hello world2"))
+	if err != nil {
+		t.Errorf("Error writing to file: %v", err)
+	}
+
+	log.Println(pg)
+	pg, err = p.Write([]byte("hello world"))
+	if err != nil {
+		t.Errorf("Error writing to file: %v", err)
+	}
+
+	log.Println(pg)
+
+	data, _, err := p.Read(4)
+	if err != nil {
+		t.Errorf("Error reading from file: %v", err)
+	}
+
+	if string(data) != "hello world2" {
+		t.Errorf("Expected 'hello world2', got %s", string(data))
+	}
+}
+
+func TestPagerIterator(t *testing.T) {
+	defer os.Remove("test.bin")
+	p, err := Open("test.bin", os.O_CREATE|os.O_RDWR, 0777, 4, true, time.Millisecond*128)
+	if err != nil {
+		t.Errorf("Error opening file: %v", err)
+	}
+
+	defer p.Close()
+
+	p.Write([]byte("hello world"))
+	p.Write([]byte("hello world2"))
+	p.Write([]byte("hello world3"))
+
+	it := NewIterator(p)
+	for it.Next() {
+		data, err := it.Read()
+		if err != nil {
+			break
+		}
+		log.Println(string(data))
+
+	}
+
+	for {
+		if !it.Prev() {
+			break
+		}
+
+		data, err := it.Read()
+		if err != nil {
+			break
+		}
+		log.Println(string(data))
+	}
+}
+
+func BenchmarkPager_Write(b *testing.B) {
+	defer os.Remove("test.bin")
+	p, err := Open("test.bin", os.O_CREATE|os.O_RDWR, 0777, 128, true, time.Millisecond*128)
+	if err != nil {
+		b.Fatalf("Error opening file: %v", err)
+	}
+	defer p.Close()
+
+	data := []byte("hello world")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := p.Write(data); err != nil {
+			b.Fatalf("Error writing to file: %v", err)
+		}
+	}
+}
