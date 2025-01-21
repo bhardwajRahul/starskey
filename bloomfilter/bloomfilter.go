@@ -23,13 +23,14 @@ import (
 	"hash"
 	"hash/fnv"
 	"math"
+
+	"github.com/zeebo/xxh3"
 )
 
 // BloomFilter struct represents a Bloom filter
 type BloomFilter struct {
 	Bitset    []int8        // Bitset, each int8 can store 8 bits
 	Size      uint          // Size of the bit array
-	HashCount uint          // Number of hash functions
 	hashFuncs []hash.Hash64 // Hash functions (can't be exported on purpose for serialization purposes..)
 }
 
@@ -41,7 +42,6 @@ func New(expectedItems uint, falsePositiveRate float64) *BloomFilter {
 	bf := &BloomFilter{
 		Bitset:    make([]int8, (size+7)/8), // Allocate enough int8s to store the bits
 		Size:      size,
-		HashCount: hashCount,
 		hashFuncs: make([]hash.Hash64, hashCount),
 	}
 
@@ -55,10 +55,10 @@ func New(expectedItems uint, falsePositiveRate float64) *BloomFilter {
 
 // Add adds an item to the Bloom filter
 func (bf *BloomFilter) Add(data []byte) {
-	for i := uint(0); i < bf.HashCount; i++ {
-		bf.hashFuncs[i].Reset()
-		bf.hashFuncs[i].Write(data)
-		hash := bf.hashFuncs[i].Sum64()
+	for _, hf := range bf.hashFuncs {
+		hf.Reset()
+		hf.Write(data)
+		hash := hf.Sum64()
 		position := hash % uint64(bf.Size)
 		bf.Bitset[position/8] |= 1 << (position % 8)
 	}
@@ -66,10 +66,10 @@ func (bf *BloomFilter) Add(data []byte) {
 
 // Contains checks if an item might exist in the Bloom filter
 func (bf *BloomFilter) Contains(data []byte) bool {
-	for i := uint(0); i < bf.HashCount; i++ {
-		bf.hashFuncs[i].Reset()
-		bf.hashFuncs[i].Write(data)
-		hash := bf.hashFuncs[i].Sum64()
+	for _, hf := range bf.hashFuncs {
+		hf.Reset()
+		hf.Write(data)
+		hash := hf.Sum64()
 		position := hash % uint64(bf.Size)
 		if bf.Bitset[position/8]&(1<<(position%8)) == 0 {
 			return false // Definitely not in set
@@ -110,9 +110,9 @@ func Deserialize(data []byte) (*BloomFilter, error) {
 	}
 
 	// Reinitialize hash functions
-	bf.hashFuncs = make([]hash.Hash64, bf.HashCount)
-	for i := uint(0); i < bf.HashCount; i++ {
-		bf.hashFuncs[i] = fnv.New64a()
+	bf.hashFuncs = make([]hash.Hash64, len(bf.hashFuncs))
+	for i := range bf.hashFuncs {
+		bf.hashFuncs[i] = xxh3.New()
 	}
 
 	return &bf, nil
