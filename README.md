@@ -2,6 +2,8 @@
     <h1 align="left"><img width="256" src="artwork/starskey_logo.png"></h1>
 </div>
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/starskey-io/starskey.svg)](https://pkg.go.dev/github.com/starskey-io/starskey)
+
 Starskey is a fast embedded key-value store package for GO!  Starskey implements a multi-level, durable log structured merge tree.
 
 ## Features
