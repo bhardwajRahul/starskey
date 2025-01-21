@@ -357,3 +357,8 @@ func (it *Iterator) stackAdd(pg int) {
 func (p *Pager) FileName() string {
 	return p.file.Name()
 }
+
+// EscalateFSync escalates an fsync to disk sending a trigger through channel
+func (p *Pager) EscalateFSync() {
+	p.file.Sync()
+}
