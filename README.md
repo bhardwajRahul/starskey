@@ -8,7 +8,7 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 
 ## Features
 - **Levelled partial merge compaction**  Compactions occur on writes, if any disk level reaches it's max size half of the sstables are merged into a new sstable and placed into the next level.  This algorithm is recursive until last level.  At last level if full we merge all sstables into a new sstable.
-- **Simple API** with Put, Get, Delete, Range, FilterKeys
+- **Simple API** with Put, Get, Delete, Range, FilterKeys, Update (for txns)
 - **Atomic transactions** You can group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed transactions roll back.
 - **Configurable options** You can configure many options such as max levels, memtable threshold, bloom filter, and more.
 - **WAL with recovery** Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
@@ -105,6 +105,19 @@ txn.Put([]byte("key"), []byte("value"))
 
 if err := txn.Commit(); err != nil {
     t.Fatalf("Failed to commit transaction: %v", err)
+}
+```
+
+OR
+
+```go
+err = starskey.Update(func(txn *Txn) error {
+    txn.Put([]byte("key"), []byte("value")) // or txn.Delete, txn.Get
+    // ..
+    return nil
+})
+if err != nil {
+    t.Fatalf("Failed to update: %v", err)
 }
 ```
 

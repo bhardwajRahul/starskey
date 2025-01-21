@@ -83,6 +83,7 @@ type OperationType int
 const (
 	Put OperationType = iota
 	Delete
+	Get
 )
 
 type CompressionOption int
@@ -275,6 +276,30 @@ func (skey *Starskey) BeginTxn() *Txn {
 	}
 }
 
+// Get retrieves a key-value pair from a transaction
+func (txn *Txn) Get(key []byte) ([]byte, error) {
+	txn.lock.Lock()
+	defer txn.lock.Unlock()
+
+	// Check if the key is in the transaction operations
+	for _, op := range txn.operations {
+		if bytes.Equal(op.key, key) {
+			if op.op == Delete {
+				return nil, nil // Key is marked for deletion
+			}
+			return op.value, nil
+		}
+	}
+
+	// If not found in transaction, check the database
+	value, err := txn.db.Get(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return value, nil
+}
+
 // Put puts a key-value pair into the database from a transaction
 func (txn *Txn) Put(key, value []byte) {
 	txn.lock.Lock()
@@ -323,8 +348,12 @@ func (txn *Txn) Delete(key []byte) {
 
 // Commit commits a transaction
 func (txn *Txn) Commit() error {
+	txn.db.lock.Lock()
+	defer txn.db.lock.Unlock()
+
 	txn.lock.Lock()
 	defer txn.lock.Unlock()
+
 	for _, op := range txn.operations {
 		var record *WALRecord
 		switch op.op {
@@ -342,6 +371,8 @@ func (txn *Txn) Commit() error {
 				Value: op.value,
 				Op:    Delete,
 			}
+		case Get:
+			continue
 		}
 
 		// Serialize the WAL record
@@ -356,6 +387,9 @@ func (txn *Txn) Commit() error {
 			_ = txn.Rollback()
 			return err
 		}
+
+		// Escalate write
+		txn.db.wal.EscalateFSync()
 
 		// Put the key-value pair into the memtable
 		err = txn.db.memtable.Put(op.key, op.value)
@@ -380,8 +414,37 @@ func (txn *Txn) Commit() error {
 
 }
 
+// Update runs a function within a transaction.
+func (skey *Starskey) Update(fn func(tx *Txn) error) error {
+	// Begin a new transaction
+	txn := skey.BeginTxn()
+	if txn == nil {
+		return errors.New("failed to begin transaction")
+	}
+
+	// Call the provided function with the transaction
+	err := fn(txn)
+	if err != nil {
+		// If the function returns an error, roll back the transaction..
+		if rollbackErr := txn.Rollback(); rollbackErr != nil {
+			return fmt.Errorf("transaction rollback failed: %v, original error: %v", rollbackErr, err)
+		}
+		return err
+	}
+
+	// If the function succeeds, commit the transaction
+	if commitErr := txn.Commit(); commitErr != nil {
+		return fmt.Errorf("transaction commit failed: %v", commitErr)
+	}
+
+	return nil
+}
+
 // Rollback rolls back a transaction
 func (txn *Txn) Rollback() error {
+	txn.db.lock.Lock()
+	defer txn.db.lock.Unlock()
+
 	txn.lock.Lock()
 	defer txn.lock.Unlock()
 	for _, op := range txn.operations {
