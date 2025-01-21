@@ -279,7 +279,7 @@ func (skey *Starskey) BeginTxn() *Txn {
 // Get retrieves a key-value pair from a transaction
 func (txn *Txn) Get(key []byte) ([]byte, error) {
 	txn.lock.RLock()
-	defer txn.lock.Unlock()
+	defer txn.lock.RUnlock()
 
 	// Check if the key is in the transaction operations
 	for _, op := range txn.operations {
@@ -523,7 +523,7 @@ func (skey *Starskey) Put(key, value []byte) error {
 func (skey *Starskey) Get(key []byte) ([]byte, error) {
 	// Lock for thread safety
 	skey.lock.RLock()
-	defer skey.lock.Unlock()
+	defer skey.lock.RUnlock()
 
 	// Check memtable first
 	if value, exists := skey.memtable.Get(key); exists {
@@ -601,7 +601,7 @@ func (skey *Starskey) Delete(key []byte) error {
 // Range retrieves a range of values from the database
 func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
 	skey.lock.RLock()
-	defer skey.lock.Unlock()
+	defer skey.lock.RUnlock()
 
 	var result [][]byte
 	seenKeys := make(map[string]struct{})
@@ -670,7 +670,7 @@ func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
 // FilterKeys retrieves values from the database that match a key filter
 func (skey *Starskey) FilterKeys(compare func(key []byte) bool) ([][]byte, error) {
 	skey.lock.RLock()
-	defer skey.lock.Unlock()
+	defer skey.lock.RUnlock()
 
 	var result [][]byte
 	seenKeys := make(map[string]struct{})
