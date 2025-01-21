@@ -30,8 +30,9 @@ func TestNewBloomFilter(t *testing.T) {
 	if bf.HashCount == 0 {
 		t.Errorf("Expected non-zero hash count, got %d", bf.HashCount)
 	}
-	if len(bf.Bitset) != int(bf.Size) {
-		t.Errorf("Expected bitset length %d, got %d", bf.Size, len(bf.Bitset))
+	expectedBitsetLength := (bf.Size + 7) / 8
+	if len(bf.Bitset) != int(expectedBitsetLength) {
+		t.Errorf("Expected bitset length %d, got %d", expectedBitsetLength, len(bf.Bitset))
 	}
 	if len(bf.hashFuncs) != int(bf.HashCount) {
 		t.Errorf("Expected hashFuncs length %d, got %d", bf.HashCount, len(bf.hashFuncs))
@@ -82,6 +83,22 @@ func TestAddAndContains(t *testing.T) {
 	if bf.Contains(nonExistentData) {
 		t.Errorf("Expected BloomFilter to not contain non-existent data")
 	}
+}
+
+func TestNewBloomFilterSerializationSize(t *testing.T) {
+	bf := New(1_000_000, 0.01)
+
+	for i := 0; i < 1_000_000; i++ {
+		bf.Add([]byte(fmt.Sprintf("testdata%d", i)))
+	}
+
+	serialized, err := bf.Serialize()
+	if err != nil {
+		t.Errorf("Error serializing BloomFilter: %v", err)
+
+	}
+
+	t.Logf("Size of serialized bloom filter at 1m items %.2f MB\n", float64(len(serialized))/1024/1024)
 }
 
 func BenchmarkAdd(b *testing.B) {
