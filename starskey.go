@@ -122,19 +122,19 @@ type VLogRecord struct {
 
 // Starskey represents the main struct for the package
 type Starskey struct {
-	wal      *pager.Pager // Write-ahead log
-	memtable *ttree.TTree // Memtable
-	levels   []*Level     // Disk levels
-	config   *Config      // Starskey configuration
-	lock     *sync.Mutex  // Mutex for thread safety
-	logFile  *os.File     // Debug log file
+	wal      *pager.Pager  // Write-ahead log
+	memtable *ttree.TTree  // Memtable
+	levels   []*Level      // Disk levels
+	config   *Config       // Starskey configuration
+	lock     *sync.RWMutex // Mutex for thread safety
+	logFile  *os.File      // Debug log file
 }
 
 // Txn represents a transaction
 type Txn struct {
 	db         *Starskey       // The db instance
 	operations []*TxnOperation // Operations in the transaction
-	lock       *sync.Mutex     // Mutex for thread safety
+	lock       *sync.RWMutex   // Mutex for thread safety
 }
 
 // TxnOperation represents an operation in a transaction
@@ -251,7 +251,7 @@ func Open(config *Config) (*Starskey, error) {
 
 	log.Println("Levels opened successfully")
 
-	skey.lock = &sync.Mutex{}
+	skey.lock = &sync.RWMutex{}
 
 	log.Println("Replaying WAL")
 
@@ -271,14 +271,14 @@ func Open(config *Config) (*Starskey, error) {
 func (skey *Starskey) BeginTxn() *Txn {
 	return &Txn{
 		operations: make([]*TxnOperation, 0),
-		lock:       &sync.Mutex{},
+		lock:       &sync.RWMutex{},
 		db:         skey,
 	}
 }
 
 // Get retrieves a key-value pair from a transaction
 func (txn *Txn) Get(key []byte) ([]byte, error) {
-	txn.lock.Lock()
+	txn.lock.RLock()
 	defer txn.lock.Unlock()
 
 	// Check if the key is in the transaction operations
@@ -522,7 +522,7 @@ func (skey *Starskey) Put(key, value []byte) error {
 // Get retrieves a key from the database
 func (skey *Starskey) Get(key []byte) ([]byte, error) {
 	// Lock for thread safety
-	skey.lock.Lock()
+	skey.lock.RLock()
 	defer skey.lock.Unlock()
 
 	// Check memtable first
@@ -600,7 +600,7 @@ func (skey *Starskey) Delete(key []byte) error {
 
 // Range retrieves a range of values from the database
 func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
-	skey.lock.Lock()
+	skey.lock.RLock()
 	defer skey.lock.Unlock()
 
 	var result [][]byte
@@ -669,7 +669,7 @@ func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
 
 // FilterKeys retrieves values from the database that match a key filter
 func (skey *Starskey) FilterKeys(compare func(key []byte) bool) ([][]byte, error) {
-	skey.lock.Lock()
+	skey.lock.RLock()
 	defer skey.lock.Unlock()
 
 	var result [][]byte
