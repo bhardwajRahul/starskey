@@ -30,8 +30,9 @@ func TestNewBloomFilter(t *testing.T) {
 	if bf.HashCount == 0 {
 		t.Errorf("Expected non-zero hash count, got %d", bf.HashCount)
 	}
-	if len(bf.Bitset) != int(bf.Size) {
-		t.Errorf("Expected bitset length %d, got %d", bf.Size, len(bf.Bitset))
+	expectedBitsetLength := (bf.Size + 7) / 8
+	if len(bf.Bitset) != int(expectedBitsetLength) {
+		t.Errorf("Expected bitset length %d, got %d", expectedBitsetLength, len(bf.Bitset))
 	}
 	if len(bf.hashFuncs) != int(bf.HashCount) {
 		t.Errorf("Expected hashFuncs length %d, got %d", bf.HashCount, len(bf.hashFuncs))
