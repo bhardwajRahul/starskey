@@ -13,7 +13,7 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 - **Key value separation** Keys and values are stored separately for sstables within a klog and vlog respectively.
 - **Bloom filters** Each sstable has an in memory bloom filter to reduce disk reads.
 - **Fast** up to 400k+ ops per second.
-- **Compression** Snappy compression is available.
+- **Compression** S2, and Snappy compression is available.
 - **Logging** Logging to file is available.
 - **Thread safe** Starskey is thread safe.
 
