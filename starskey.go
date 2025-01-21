@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/snappy"
 	"github.com/starskey-io/starskey/bloomfilter"
 	"github.com/starskey-io/starskey/pager"
@@ -52,14 +53,15 @@ var (
 
 // Config represents the configuration for starskey instance
 type Config struct {
-	Permission     os.FileMode // Directory and file permissions
-	Directory      string      // Directory to store the starskey files
-	FlushThreshold uint64      // Flush threshold for memtable
-	MaxLevel       uint64      // Maximum number of levels
-	SizeFactor     uint64      // Size factor for each level
-	BloomFilter    bool        // Enable bloom filter
-	Logging        bool        // Enable log file
-	Compression    bool        // Enable compression
+	Permission        os.FileMode       // Directory and file permissions
+	Directory         string            // Directory to store the starskey files
+	FlushThreshold    uint64            // Flush threshold for memtable
+	MaxLevel          uint64            // Maximum number of levels
+	SizeFactor        uint64            // Size factor for each level
+	BloomFilter       bool              // Enable bloom filter
+	Logging           bool              // Enable log file
+	Compression       bool              // Enable compression
+	CompressionOption CompressionOption // Desired compression option
 }
 
 // Level represents a disk level
@@ -81,6 +83,15 @@ type OperationType int
 const (
 	Put OperationType = iota
 	Delete
+)
+
+type CompressionOption int
+
+// Compression options
+const (
+	NoCompression CompressionOption = iota
+	SnappyCompression
+	S2Compression
 )
 
 // WALRecord represents a WAL record
@@ -169,6 +180,14 @@ func Open(config *Config) (*Starskey, error) {
 	if len(config.Directory) == 0 {
 		return nil, errors.New("directory cannot be empty")
 
+	}
+
+	if config.Compression {
+		switch config.CompressionOption {
+		case SnappyCompression, S2Compression: // All good
+		default:
+			return nil, errors.New("invalid compression option")
+		}
 	}
 
 	// We check if configured directory ends with a slash
@@ -326,7 +345,7 @@ func (txn *Txn) Commit() error {
 		}
 
 		// Serialize the WAL record
-		walSerialized, err := serializeWalRecord(record, txn.db.config.Compression)
+		walSerialized, err := serializeWalRecord(record, txn.db.config.Compression, txn.db.config.CompressionOption)
 		if err != nil {
 			_ = txn.Rollback()
 			return err
@@ -376,7 +395,7 @@ func (txn *Txn) Rollback() error {
 				}
 
 				// Serialize the WAL record
-				walSerialized, err := serializeWalRecord(record, txn.db.config.Compression)
+				walSerialized, err := serializeWalRecord(record, txn.db.config.Compression, txn.db.config.CompressionOption)
 				if err != nil {
 					return err
 				}
@@ -412,7 +431,7 @@ func (skey *Starskey) Put(key, value []byte) error {
 	}
 
 	// Serialize the WAL record
-	walSerialized, err := serializeWalRecord(record, skey.config.Compression)
+	walSerialized, err := serializeWalRecord(record, skey.config.Compression, skey.config.CompressionOption)
 	if err != nil {
 		return err
 	}
@@ -478,7 +497,7 @@ func (skey *Starskey) Get(key []byte) ([]byte, error) {
 				if err != nil {
 					break
 				}
-				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression)
+				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression, skey.config.CompressionOption)
 				if err != nil {
 					return nil, err
 				}
@@ -490,7 +509,7 @@ func (skey *Starskey) Get(key []byte) ([]byte, error) {
 					if err != nil {
 						return nil, err
 					}
-					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression)
+					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
 					if err != nil {
 						return nil, err
 					}
@@ -551,7 +570,7 @@ func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
 				if err != nil {
 					return nil, err
 				}
-				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression)
+				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression, skey.config.CompressionOption)
 				if err != nil {
 					return nil, err
 				}
@@ -565,7 +584,7 @@ func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
 					if err != nil {
 						return nil, err
 					}
-					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression)
+					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
 					if err != nil {
 						return nil, err
 					}
@@ -628,7 +647,7 @@ func (skey *Starskey) FilterKeys(compare func(key []byte) bool) ([][]byte, error
 				if err != nil {
 					return nil, err
 				}
-				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression)
+				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression, skey.config.CompressionOption)
 				if err != nil {
 					return nil, err
 				}
@@ -642,7 +661,7 @@ func (skey *Starskey) FilterKeys(compare func(key []byte) bool) ([][]byte, error
 					if err != nil {
 						return nil, err
 					}
-					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression)
+					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
 					if err != nil {
 						return nil, err
 					}
@@ -702,27 +721,44 @@ func (skey *Starskey) Close() error {
 }
 
 // serializeWalRecord serializes a WAL record
-func serializeWalRecord(record *WALRecord, compress bool) ([]byte, error) {
+func serializeWalRecord(record *WALRecord, compress bool, option CompressionOption) ([]byte, error) {
 	data, err := bson.Marshal(record)
 	if err != nil {
 		return nil, err
 	}
 
 	if compress {
-		compressedData := snappy.Encode(nil, data)
-		return compressedData, nil
+		switch option {
+		case SnappyCompression:
+			compressedData := snappy.Encode(nil, data)
+			return compressedData, nil
+		case S2Compression:
+			compressedData := s2.Encode(nil, data)
+			return compressedData, nil
+		default:
+			return nil, nil
+		}
 	}
 	return data, nil
 }
 
 // deserializeWalRecord deserializes a WAL record
-func deserializeWalRecord(data []byte, decompress bool) (*WALRecord, error) {
+func deserializeWalRecord(data []byte, decompress bool, option CompressionOption) (*WALRecord, error) {
 	if decompress {
-		decompressedData, err := snappy.Decode(nil, data)
-		if err != nil {
-			log.Fatal("Error decompressing data:", err)
+		switch option {
+		case SnappyCompression:
+			decompressedData, err := snappy.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
+		case S2Compression:
+			decompressedData, err := s2.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
 		}
-		data = decompressedData
 	}
 
 	var record WALRecord
@@ -734,27 +770,44 @@ func deserializeWalRecord(data []byte, decompress bool) (*WALRecord, error) {
 }
 
 // serializeKLogRecord serializes a key log record
-func serializeKLogRecord(record *KLogRecord, compress bool) ([]byte, error) {
+func serializeKLogRecord(record *KLogRecord, compress bool, option CompressionOption) ([]byte, error) {
 	data, err := bson.Marshal(record)
 	if err != nil {
 		return nil, err
 	}
 
 	if compress {
-		compressedData := snappy.Encode(nil, data)
-		return compressedData, nil
+		switch option {
+		case SnappyCompression:
+			compressedData := snappy.Encode(nil, data)
+			return compressedData, nil
+		case S2Compression:
+			compressedData := s2.Encode(nil, data)
+			return compressedData, nil
+		default:
+			return nil, nil
+		}
 	}
 	return data, nil
 }
 
 // deserializeKLogRecord deserializes a key log record
-func deserializeKLogRecord(data []byte, decompress bool) (*KLogRecord, error) {
+func deserializeKLogRecord(data []byte, decompress bool, option CompressionOption) (*KLogRecord, error) {
 	if decompress {
-		decompressedData, err := snappy.Decode(nil, data)
-		if err != nil {
-			log.Fatal("Error decompressing data:", err)
+		switch option {
+		case SnappyCompression:
+			decompressedData, err := snappy.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
+		case S2Compression:
+			decompressedData, err := s2.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
 		}
-		data = decompressedData
 	}
 
 	var record KLogRecord
@@ -766,27 +819,44 @@ func deserializeKLogRecord(data []byte, decompress bool) (*KLogRecord, error) {
 }
 
 // serializeVLogRecord serializes a value log record
-func serializeVLogRecord(record *VLogRecord, compress bool) ([]byte, error) {
+func serializeVLogRecord(record *VLogRecord, compress bool, option CompressionOption) ([]byte, error) {
 	data, err := bson.Marshal(record)
 	if err != nil {
 		return nil, err
 	}
 
 	if compress {
-		compressedData := snappy.Encode(nil, data)
-		return compressedData, nil
+		switch option {
+		case SnappyCompression:
+			compressedData := snappy.Encode(nil, data)
+			return compressedData, nil
+		case S2Compression:
+			compressedData := s2.Encode(nil, data)
+			return compressedData, nil
+		default:
+			return nil, nil
+		}
 	}
 	return data, nil
 }
 
 // deserializeVLogRecord deserializes a value log record
-func deserializeVLogRecord(data []byte, decompress bool) (*VLogRecord, error) {
+func deserializeVLogRecord(data []byte, decompress bool, option CompressionOption) (*VLogRecord, error) {
 	if decompress {
-		decompressedData, err := snappy.Decode(nil, data)
-		if err != nil {
-			log.Fatal("Error decompressing data:", err)
+		switch option {
+		case SnappyCompression:
+			decompressedData, err := snappy.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
+		case S2Compression:
+			decompressedData, err := s2.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
 		}
-		data = decompressedData
 	}
 
 	var record VLogRecord
@@ -926,7 +996,7 @@ func (skey *Starskey) replayWAL() error {
 		}
 
 		// Deserialize the WAL record
-		record, err := deserializeWalRecord(data, skey.config.Compression)
+		record, err := deserializeWalRecord(data, skey.config.Compression, skey.config.CompressionOption)
 		if err != nil {
 			return err
 		}
@@ -1043,7 +1113,7 @@ func (skey *Starskey) run() error {
 				Value: entry.Value,
 			}
 
-			vlogSerialized, err := serializeVLogRecord(vlogRecord, skey.config.Compression)
+			vlogSerialized, err := serializeVLogRecord(vlogRecord, skey.config.Compression, skey.config.CompressionOption)
 			if err != nil {
 				_ = klog.Close()
 				_ = vlog.Close()
@@ -1074,7 +1144,7 @@ func (skey *Starskey) run() error {
 				ValPageNum: uint64(pg),
 			}
 
-			klogSerialized, err := serializeKLogRecord(klogRecord, skey.config.Compression)
+			klogSerialized, err := serializeKLogRecord(klogRecord, skey.config.Compression, skey.config.CompressionOption)
 			if err != nil {
 				_ = klog.Close()
 				_ = vlog.Close()
@@ -1270,7 +1340,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 		hasMore := it.Next()
 		var current *KLogRecord
 		if hasMore {
-			deserializedKLogRecord, err := deserializeKLogRecord(it.CurrentData, skey.config.Compression)
+			deserializedKLogRecord, err := deserializeKLogRecord(it.CurrentData, skey.config.Compression, skey.config.CompressionOption)
 			if err != nil {
 				_ = klog.Close()
 				_ = vlog.Close()
@@ -1316,7 +1386,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 			return nil
 		}
 
-		vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression)
+		vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
 		if err != nil {
 			_ = klog.Close()
 			_ = vlog.Close()
@@ -1329,7 +1399,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 			// We skip the tombstone
 			iterators[smallestIdx].hasMore = iterators[smallestIdx].iterator.Next()
 			if iterators[smallestIdx].hasMore {
-				deserializedKLogRecord, err := deserializeKLogRecord(iterators[smallestIdx].iterator.CurrentData, skey.config.Compression)
+				deserializedKLogRecord, err := deserializeKLogRecord(iterators[smallestIdx].iterator.CurrentData, skey.config.Compression, skey.config.CompressionOption)
 				if err != nil {
 					_ = klog.Close()
 					_ = vlog.Close()
@@ -1343,7 +1413,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 		}
 
 		// Then we write it to new value log
-		vlogRecordSerialized, err := serializeVLogRecord(vlogRecord, skey.config.Compression)
+		vlogRecordSerialized, err := serializeVLogRecord(vlogRecord, skey.config.Compression, skey.config.CompressionOption)
 		if err != nil {
 			_ = klog.Close()
 			_ = vlog.Close()
@@ -1367,7 +1437,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 			ValPageNum: uint64(pg),
 		}
 
-		klogRecordSerialized, err := serializeKLogRecord(klogRecord, skey.config.Compression)
+		klogRecordSerialized, err := serializeKLogRecord(klogRecord, skey.config.Compression, skey.config.CompressionOption)
 		if err != nil {
 			_ = klog.Close()
 			_ = vlog.Close()
@@ -1391,7 +1461,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 
 		it.hasMore = it.iterator.Next()
 		if it.hasMore {
-			deserializedKLogRecord, err := deserializeKLogRecord(it.iterator.CurrentData, skey.config.Compression)
+			deserializedKLogRecord, err := deserializeKLogRecord(it.iterator.CurrentData, skey.config.Compression, skey.config.CompressionOption)
 			if err != nil {
 				_ = klog.Close()
 				_ = vlog.Close()
@@ -1463,7 +1533,7 @@ func (sst *SSTable) createBloomFilter(skey *Starskey) error {
 		if err != nil {
 			break
 		}
-		klogRecord, err := deserializeKLogRecord(data, skey.config.Compression)
+		klogRecord, err := deserializeKLogRecord(data, skey.config.Compression, skey.config.CompressionOption)
 		if err != nil {
 			return err
 		}

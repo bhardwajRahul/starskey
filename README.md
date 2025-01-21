@@ -7,13 +7,13 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 ## Features
 - **Levelled partial merge compaction**  Compactions occur on writes, if any disk level reaches it's max size half of the sstables are merged into a new sstable and placed into the next level.  This algorithm is recursive until last level.  At last level if full we merge all sstables into a new sstable.
 - **Simple API** with Put, Get, Delete, Range, FilterKeys
-- **Atomic transactions** You can group multiple operations into a single atomic transaction.  If transactions fail they rollback.
+- **Atomic transactions** You can group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed transactions roll back.
 - **Configurable options** You can configure many options such as max levels, memtable threshold, bloom filter, and more.
 - **WAL with recovery** Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
-- **Key value separation** Keys and values are stored separately for sstables.
+- **Key value separation** Keys and values are stored separately for sstables within a klog and vlog respectively.
 - **Bloom filters** Each sstable has an in memory bloom filter to reduce disk reads.
 - **Fast** up to 400k+ ops per second.
-- **Compression** Snappy compression is available.
+- **Compression** S2, and Snappy compression is available.
 - **Logging** Logging to file is available.
 - **Thread safe** Starskey is thread safe.
 
@@ -25,15 +25,16 @@ import (
 )
 
 starskey, err := Open(&Config{
-        Permission:     0755,           // Dir, file permission
-        Directory:      "db_dir",         // Directory to store data
-        FlushThreshold: 1024 * 1024,    // Flush threshold in bytes
-        MaxLevel:       3,              // Max levels number of disk levels
-        SizeFactor:     10,             // Size factor for each level.  Say 10 that's 10 * the FlushThreshold at each level. So level 1 is 10MB, level 2 is 100MB, level 3 is 1GB.
-        BloomFilter:    false,          // If you want to use bloom filters
-        Logging:        true,           // Enable logging to file
-        Compression:    false,          // Enable compression (Snappy)
-    })                                  // Config cannot be nil**
+        Permission:        0755,                 // Dir, file permission
+        Directory:         "db_dir",             // Directory to store data
+        FlushThreshold:    (1024 * 1024) * 24,   // 24mb Flush threshold in bytes
+        MaxLevel:          3,                    // Max levels number of disk levels
+        SizeFactor:        10,                   // Size factor for each level.  Say 10 that's 10 * the FlushThreshold at each level. So level 1 is 10MB, level 2 is 100MB, level 3 is 1GB.
+        BloomFilter:       false,                // If you want to use bloom filters
+        Logging:           true,                 // Enable logging to file
+        Compression:       false,                // Enable compression
+        CompressionOption: NoCompression,        // Or SnappyCompression, S2Compression
+    })                                           // Config cannot be nil**
 if err != nil {
     t.Fatalf("Failed to open starskey: %v", err)
 }
@@ -46,10 +47,12 @@ if err := starskey.Close(); err != nil {
 key := []byte("some_key")
 value := []byte("some_value")
 
+// Write key-value pair
 if err := starskey.Put(key, value); err != nil {
     t.Fatalf("Failed to put key-value pair: %v", err)
 }
 
+// Read key-value pair
 v, err := starskey.Get(key)
 if err != nil {
     t.Fatalf("Failed to get key-value pair: %v", err)
@@ -63,8 +66,8 @@ if v == nil {
 fmt.Println(string(key), string(v))
 ```
 
-## Range
-Using range method to get a range of values between two keys.
+## Range Keys
+You can range over a min and max key to retrieve values.
 ```go
 results, err := starskey.Range([]byte("key900"), []byte("key980"))
 if err != nil {
@@ -72,8 +75,8 @@ if err != nil {
 }
 ```
 
-## FilterKeys
-Using filter keys to filter keys based on a function.
+## Filter Keys
+You can filter keys to retrieve values based on a filter/compare method.
 ```go
 compareFunc := func(key []byte) bool {
     // if has prefix "c" return true
@@ -88,7 +91,7 @@ if err != nil {
 
 
 ## Atomic Transactions
-Using atomic transactions to group multiple operations into a single atomic transaction.
+Using atomic transactions to group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed transactions roll back.
 ```go
 txn := starskey.BeginTxn()
 if txn == nil {

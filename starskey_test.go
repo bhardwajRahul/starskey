@@ -34,13 +34,13 @@ func TestSerializeDeserializeWalRecord(t *testing.T) {
 	}
 
 	// Serialize the original record
-	serializedData, err := serializeWalRecord(originalRecord, false)
+	serializedData, err := serializeWalRecord(originalRecord, false, NoCompression)
 	if err != nil {
 		t.Fatalf("Failed to serialize WAL record: %v", err)
 	}
 
 	// Deserialize the data back into a WALRecord
-	deserializedRecord, err := deserializeWalRecord(serializedData, false)
+	deserializedRecord, err := deserializeWalRecord(serializedData, false, NoCompression)
 	if err != nil {
 		t.Fatalf("Failed to deserialize WAL record: %v", err)
 	}
@@ -58,13 +58,13 @@ func TestSerializeDeserializeKLogRecord(t *testing.T) {
 	}
 
 	// Serialize the original record
-	serializedData, err := serializeKLogRecord(originalRecord, false)
+	serializedData, err := serializeKLogRecord(originalRecord, false, NoCompression)
 	if err != nil {
 		t.Fatalf("Failed to serialize KLog record: %v", err)
 	}
 
 	// Deserialize the data back into a KLogRecord
-	deserializedRecord, err := deserializeKLogRecord(serializedData, false)
+	deserializedRecord, err := deserializeKLogRecord(serializedData, false, NoCompression)
 	if err != nil {
 		t.Fatalf("Failed to deserialize KLog record: %v", err)
 
@@ -82,13 +82,13 @@ func TestSerializeDeserializeVLogRecord(t *testing.T) {
 	}
 
 	// Serialize the original record
-	serializedData, err := serializeVLogRecord(originalRecord, false)
+	serializedData, err := serializeVLogRecord(originalRecord, false, NoCompression)
 	if err != nil {
 		t.Fatalf("Failed to serialize VLog record: %v", err)
 	}
 
 	// Deserialize the data back into a VLogRecord
-	deserializedRecord, err := deserializeVLogRecord(serializedData, false)
+	deserializedRecord, err := deserializeVLogRecord(serializedData, false, NoCompression)
 	if err != nil {
 		t.Fatalf("Failed to deserialize VLog record: %v", err)
 	}
@@ -107,13 +107,13 @@ func TestSerializeDeserializeWalRecordCompress(t *testing.T) {
 	}
 
 	// Serialize the original record
-	serializedData, err := serializeWalRecord(originalRecord, true)
+	serializedData, err := serializeWalRecord(originalRecord, true, SnappyCompression)
 	if err != nil {
 		t.Fatalf("Failed to serialize WAL record: %v", err)
 	}
 
 	// Deserialize the data back into a WALRecord
-	deserializedRecord, err := deserializeWalRecord(serializedData, true)
+	deserializedRecord, err := deserializeWalRecord(serializedData, true, SnappyCompression)
 	if err != nil {
 		t.Fatalf("Failed to deserialize WAL record: %v", err)
 	}
@@ -131,13 +131,13 @@ func TestSerializeDeserializeKLogRecordCompress(t *testing.T) {
 	}
 
 	// Serialize the original record
-	serializedData, err := serializeKLogRecord(originalRecord, true)
+	serializedData, err := serializeKLogRecord(originalRecord, true, SnappyCompression)
 	if err != nil {
 		t.Fatalf("Failed to serialize KLog record: %v", err)
 	}
 
 	// Deserialize the data back into a KLogRecord
-	deserializedRecord, err := deserializeKLogRecord(serializedData, true)
+	deserializedRecord, err := deserializeKLogRecord(serializedData, true, SnappyCompression)
 	if err != nil {
 		t.Fatalf("Failed to deserialize KLog record: %v", err)
 
@@ -155,13 +155,13 @@ func TestSerializeDeserializeVLogRecordCompress(t *testing.T) {
 	}
 
 	// Serialize the original record
-	serializedData, err := serializeVLogRecord(originalRecord, true)
+	serializedData, err := serializeVLogRecord(originalRecord, true, SnappyCompression)
 	if err != nil {
 		t.Fatalf("Failed to serialize VLog record: %v", err)
 	}
 
 	// Deserialize the data back into a VLogRecord
-	deserializedRecord, err := deserializeVLogRecord(serializedData, true)
+	deserializedRecord, err := deserializeVLogRecord(serializedData, true, SnappyCompression)
 	if err != nil {
 		t.Fatalf("Failed to deserialize VLog record: %v", err)
 	}
