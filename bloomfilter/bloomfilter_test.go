@@ -84,6 +84,22 @@ func TestAddAndContains(t *testing.T) {
 	}
 }
 
+func TestNewBloomFilterSerializationSize(t *testing.T) {
+	bf := New(1_000_000, 0.01)
+
+	for i := 0; i < 1_000_000; i++ {
+		bf.Add([]byte(fmt.Sprintf("testdata%d", i)))
+	}
+
+	serialized, err := bf.Serialize()
+	if err != nil {
+		t.Errorf("Error serializing BloomFilter: %v", err)
+
+	}
+
+	t.Logf("Size of serialized bloom filter at 1m items %.2f MB\n", float64(len(serialized))/1024/1024)
+}
+
 func BenchmarkAdd(b *testing.B) {
 	bf := New(1000, 0.01)
 	data := []byte("testdata")

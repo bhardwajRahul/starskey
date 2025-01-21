@@ -27,7 +27,7 @@ import (
 
 // BloomFilter struct represents a Bloom filter
 type BloomFilter struct {
-	Bitset    []bool        // Bitset, true means the bit is set
+	Bitset    []int8        // Bitset, each int8 can store 8 bits
 	Size      uint          // Size of the bit array
 	HashCount uint          // Number of hash functions
 	hashFuncs []hash.Hash64 // Hash functions (can't be exported on purpose for serialization purposes..)
@@ -39,7 +39,7 @@ func New(expectedItems uint, falsePositiveRate float64) *BloomFilter {
 	hashCount := optimalHashCount(size, expectedItems)
 
 	bf := &BloomFilter{
-		Bitset:    make([]bool, size),
+		Bitset:    make([]int8, (size+7)/8), // Allocate enough int8s to store the bits
 		Size:      size,
 		HashCount: hashCount,
 		hashFuncs: make([]hash.Hash64, hashCount),
@@ -60,7 +60,7 @@ func (bf *BloomFilter) Add(data []byte) {
 		bf.hashFuncs[i].Write(data)
 		hash := bf.hashFuncs[i].Sum64()
 		position := hash % uint64(bf.Size)
-		bf.Bitset[position] = true
+		bf.Bitset[position/8] |= 1 << (position % 8)
 	}
 }
 
@@ -71,7 +71,7 @@ func (bf *BloomFilter) Contains(data []byte) bool {
 		bf.hashFuncs[i].Write(data)
 		hash := bf.hashFuncs[i].Sum64()
 		position := hash % uint64(bf.Size)
-		if !bf.Bitset[position] {
+		if bf.Bitset[position/8]&(1<<(position%8)) == 0 {
 			return false // Definitely not in set
 		}
 	}
