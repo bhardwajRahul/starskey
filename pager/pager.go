@@ -115,9 +115,9 @@ func (p *Pager) backgroundSync() {
 	for {
 		select {
 		case <-ticker.C:
-			p.file.Sync()
+			_ = p.file.Sync()
 		case <-p.syncQuit:
-			p.file.Sync() // Escalate then return..
+			_ = p.file.Sync() // Escalate then return..
 			return
 		}
 	}
@@ -358,7 +358,7 @@ func (p *Pager) FileName() string {
 	return p.file.Name()
 }
 
-// EscalateFSync escalates an fsync to disk sending a trigger through channel
+// EscalateFSync escalates a disk fsync
 func (p *Pager) EscalateFSync() {
-	p.file.Sync()
+	_ = p.file.Sync() // Is thread safe
 }
