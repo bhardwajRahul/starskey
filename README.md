@@ -19,6 +19,9 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 - **Logging** Logging to file is available.
 - **Thread safe** Starskey is thread safe.
 
+## Bench
+Use the benchmark program at [bench](https://github.com/starskey-io/bench) to compare Starskey with other popular key value stores/engines.
+
 ## Basic Example
 Below is a basic example of how to use starskey.
 ```go
