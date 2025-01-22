@@ -139,11 +139,11 @@ type Txn struct {
 
 // TxnOperation represents an operation in a transaction
 type TxnOperation struct {
-	key      []byte        // Key
-	value    []byte        // Value
-	op       OperationType // Operation type
-	rollback *TxnRollbackOperation
-	commited bool // Transaction status
+	key      []byte                // Key
+	value    []byte                // Value
+	op       OperationType         // Operation type
+	rollback *TxnRollbackOperation // The rollback for the operation
+	commited bool                  // Transaction status
 }
 
 // TxnRollbackOperation represents a rollback operation in a transaction
@@ -183,6 +183,7 @@ func Open(config *Config) (*Starskey, error) {
 
 	}
 
+	// If compression is configured we check if option is valid
 	if config.Compression {
 		switch config.CompressionOption {
 		case SnappyCompression, S2Compression: // All good
@@ -191,7 +192,7 @@ func Open(config *Config) (*Starskey, error) {
 		}
 	}
 
-	// We check if configured directory ends with a slash
+	// We check if configured directory ends with a slash, if not we add it
 	if string(config.Directory[len(config.Directory)-1]) != string(os.PathSeparator) {
 		config.Directory += string(os.PathSeparator)
 	}
@@ -243,7 +244,8 @@ func Open(config *Config) (*Starskey, error) {
 	log.Println("Memory table created successfully")
 
 	log.Println("Opening levels")
-	// We create the levels
+
+	// We open disk levels and their SSTables
 	skey.levels, err = openLevels(config)
 	if err != nil {
 		return nil, err
@@ -255,7 +257,7 @@ func Open(config *Config) (*Starskey, error) {
 
 	log.Println("Replaying WAL")
 
-	// We replay the write-ahead log
+	// We replay the write-ahead log and populate the memtable
 	if err = skey.replayWAL(); err != nil {
 		return nil, err
 	}
@@ -267,232 +269,49 @@ func Open(config *Config) (*Starskey, error) {
 	return skey, nil
 }
 
-// BeginTxn begins a new transaction
-func (skey *Starskey) BeginTxn() *Txn {
-	return &Txn{
-		operations: make([]*TxnOperation, 0),
-		lock:       &sync.Mutex{},
-		db:         skey,
-	}
-}
+// Close closes the Starskey instance
+func (skey *Starskey) Close() error {
 
-// Get retrieves a key-value pair from a transaction
-func (txn *Txn) Get(key []byte) ([]byte, error) {
-	txn.lock.Lock()
-	defer txn.lock.Unlock()
+	log.Println("Closing WAL")
 
-	// Check if the key is in the transaction operations
-	for _, op := range txn.operations {
-		if bytes.Equal(op.key, key) {
-			if op.op == Delete {
-				return nil, nil // Key is marked for deletion
-			}
-			return op.value, nil
-		}
-	}
-
-	// If not found in transaction, check the database
-	value, err := txn.db.Get(key)
-	if err != nil {
-		return nil, err
-	}
-
-	return value, nil
-}
-
-// Put puts a key-value pair into the database from a transaction
-func (txn *Txn) Put(key, value []byte) {
-	txn.lock.Lock()
-	defer txn.lock.Unlock()
-
-	txn.operations = append(txn.operations, &TxnOperation{
-		key:      key,
-		value:    value,
-		op:       Put,
-		commited: false,
-		rollback: &TxnRollbackOperation{
-			key:   key,
-			value: Tombstone,
-			op:    Delete,
-		},
-	})
-}
-
-// Delete deletes a key from the database from a transaction
-func (txn *Txn) Delete(key []byte) {
-	txn.lock.Lock()
-	defer txn.lock.Unlock()
-	currentValue, exists := txn.db.memtable.Get(key)
-	if exists {
-		txn.operations = append(txn.operations, &TxnOperation{
-			key:      key,
-			value:    currentValue.Value,
-			op:       Delete,
-			commited: false,
-			rollback: &TxnRollbackOperation{
-				key:   key,
-				value: currentValue.Value,
-				op:    Put,
-			},
-		})
-		return
-	}
-	txn.operations = append(txn.operations, &TxnOperation{
-		key:      key,
-		value:    Tombstone,
-		op:       Delete,
-		commited: false,
-		rollback: nil,
-	})
-}
-
-// Commit commits a transaction
-func (txn *Txn) Commit() error {
-	txn.db.lock.Lock()
-	defer txn.db.lock.Unlock()
-
-	txn.lock.Lock()
-	defer txn.lock.Unlock()
-
-	for _, op := range txn.operations {
-		var record *WALRecord
-		switch op.op {
-		case Put:
-			// Create a WAL record
-			record = &WALRecord{
-				Key:   op.key,
-				Value: op.value,
-				Op:    Put,
-			}
-
-		case Delete:
-			record = &WALRecord{
-				Key:   op.key,
-				Value: op.value,
-				Op:    Delete,
-			}
-		case Get:
-			continue
-		}
-
-		// Serialize the WAL record
-		walSerialized, err := serializeWalRecord(record, txn.db.config.Compression, txn.db.config.CompressionOption)
-		if err != nil {
-			_ = txn.Rollback()
-			return err
-		}
-
-		// Write the WAL record to the write-ahead log
-		if _, err = txn.db.wal.Write(walSerialized); err != nil {
-			_ = txn.Rollback()
-			return err
-		}
-
-		// Escalate write
-		txn.db.wal.EscalateFSync()
-
-		// Put the key-value pair into the memtable
-		err = txn.db.memtable.Put(op.key, op.value)
-		if err != nil {
-			_ = txn.Rollback()
-			return err
-		}
-
-		op.commited = true
-
-	}
-
-	if txn.db.memtable.SizeOfTree >= txn.db.config.FlushThreshold {
-		// Sorted run to level 1
-		if err := txn.db.run(); err != nil {
-			_ = txn.Rollback()
-			return err
-		}
-	}
-
-	return nil
-
-}
-
-// Update runs a function within a transaction.
-func (skey *Starskey) Update(fn func(tx *Txn) error) error {
-	// Begin a new transaction
-	txn := skey.BeginTxn()
-	if txn == nil {
-		return errors.New("failed to begin transaction")
-	}
-
-	// Call the provided function with the transaction
-	err := fn(txn)
-	if err != nil {
-		// If the function returns an error, roll back the transaction..
-		if rollbackErr := txn.Rollback(); rollbackErr != nil {
-			return fmt.Errorf("transaction rollback failed: %v, original error: %v", rollbackErr, err)
-		}
+	// Close the write-ahead log
+	if err := skey.wal.Close(); err != nil {
 		return err
 	}
 
-	// If the function succeeds, commit the transaction
-	if commitErr := txn.Commit(); commitErr != nil {
-		return fmt.Errorf("transaction commit failed: %v", commitErr)
+	log.Println("Closed WAL")
+
+	log.Println("Closing levels")
+
+	for _, level := range skey.levels {
+		log.Println("Closing level", level.id)
+		for _, sstable := range level.sstables {
+			// We close opened sstable files
+			if err := sstable.klog.Close(); err != nil {
+				return err
+			}
+			if err := sstable.vlog.Close(); err != nil {
+				return err
+			}
+		}
+
+		log.Println("Level", level.id, "closed")
 	}
 
-	return nil
-}
+	log.Println("Levels closed")
 
-// Rollback rolls back a transaction
-func (txn *Txn) Rollback() error {
-	txn.db.lock.Lock()
-	defer txn.db.lock.Unlock()
+	log.Println("Starskey closed")
 
-	txn.lock.Lock()
-	defer txn.lock.Unlock()
-	for _, op := range txn.operations {
-		if op.commited {
-			if op.rollback != nil {
-				// Create a WAL record
-				record := &WALRecord{
-					Key:   op.rollback.key,
-					Value: op.rollback.value,
-					Op:    op.rollback.op,
-				}
-
-				// Serialize the WAL record
-				walSerialized, err := serializeWalRecord(record, txn.db.config.Compression, txn.db.config.CompressionOption)
-				if err != nil {
-					return err
-				}
-
-				// Write the WAL record to the write-ahead log
-				if _, err = txn.db.wal.Write(walSerialized); err != nil {
-					return err
-				}
-
-				// Put the key-value pair into the memtable
-				err = txn.db.memtable.Put(op.rollback.key, op.rollback.value)
-				if err != nil {
-					return err
-				}
-			}
+	if skey.logFile != nil { // If log configured, we close it
+		if err := skey.logFile.Close(); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-// Put puts a key-value pair into the database
-func (skey *Starskey) Put(key, value []byte) error {
-	// Lock for thread safety
-	skey.lock.Lock()
-	defer skey.lock.Unlock()
-
-	// Create a WAL record
-	record := &WALRecord{
-		Key:   key,
-		Value: value,
-		Op:    Put,
-	}
-
+func (skey *Starskey) appendToWal(record *WALRecord) error {
 	// Serialize the WAL record
 	walSerialized, err := serializeWalRecord(record, skey.config.Compression, skey.config.CompressionOption)
 	if err != nil {
@@ -500,7 +319,35 @@ func (skey *Starskey) Put(key, value []byte) error {
 	}
 
 	// Write the WAL record to the write-ahead log
-	if _, err := skey.wal.Write(walSerialized); err != nil {
+	if _, err = skey.wal.Write(walSerialized); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Put puts a key-value pair into the database
+func (skey *Starskey) Put(key, value []byte) error {
+	// We validate the key and value
+	if len(key) == 0 {
+		return errors.New("key cannot be empty")
+	}
+
+	if len(value) == 0 {
+		return errors.New("value cannot be empty")
+	}
+
+	// Lock for thread safety
+	skey.lock.Lock()
+	defer skey.lock.Unlock()
+
+	// Append to WAL
+	err := skey.appendToWal(&WALRecord{
+		Key:   key,
+		Value: value,
+		Op:    Put,
+	})
+	if err != nil {
 		return err
 	}
 
@@ -510,6 +357,7 @@ func (skey *Starskey) Put(key, value []byte) error {
 		return err
 	}
 
+	// If the memtable size exceeds the flush threshold we trigger a sorted run to level 1
 	if skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
 		// Sorted run to level 1
 		if err := skey.run(); err != nil {
@@ -521,6 +369,11 @@ func (skey *Starskey) Put(key, value []byte) error {
 
 // Get retrieves a key from the database
 func (skey *Starskey) Get(key []byte) ([]byte, error) {
+	// We validate the key
+	if len(key) == 0 {
+		return nil, errors.New("key cannot be empty")
+	}
+
 	// Lock for thread safety
 	skey.lock.Lock()
 	defer skey.lock.Unlock()
@@ -595,16 +448,32 @@ func (skey *Starskey) Get(key []byte) ([]byte, error) {
 
 // Delete deletes a key from the database
 func (skey *Starskey) Delete(key []byte) error {
-	return skey.Put(key, Tombstone)
+	return skey.Put(key, Tombstone) // We simply put a tombstone value
 }
 
 // Range retrieves a range of values from the database
 func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
+	// We validate the keys
+	if len(startKey) == 0 {
+		return nil, errors.New("start key cannot be empty")
+	}
+
+	if len(endKey) == 0 {
+		return nil, errors.New("end key cannot be empty")
+	}
+
+	// Start key cannot be greater than end key
+	if bytes.Compare(startKey, endKey) > 0 {
+		return nil, errors.New("start key cannot be greater than end key")
+	}
+
+	// Lock for thread safety
 	skey.lock.Lock()
 	defer skey.lock.Unlock()
 
+	// We create a slice to store the values
 	var result [][]byte
-	seenKeys := make(map[string]struct{})
+	seenKeys := make(map[string]struct{}) // We use a map to keep track of seen keys
 
 	// Check memtable first
 	entries := skey.memtable.Range(startKey, endKey)
@@ -669,6 +538,12 @@ func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
 
 // FilterKeys retrieves values from the database that match a key filter
 func (skey *Starskey) FilterKeys(compare func(key []byte) bool) ([][]byte, error) {
+	// We validate the compare function
+	if compare == nil {
+		return nil, errors.New("compare function cannot be nil")
+	}
+
+	// Lock for thread safety
 	skey.lock.Lock()
 	defer skey.lock.Unlock()
 
@@ -744,191 +619,220 @@ func (skey *Starskey) FilterKeys(compare func(key []byte) bool) ([][]byte, error
 	return result, nil
 }
 
-// Close closes the Starskey instance
-func (skey *Starskey) Close() error {
-	log.Println("Closing WAL")
-	// Close the write-ahead log
-	if err := skey.wal.Close(); err != nil {
-		return err
+// BeginTxn begins a new transaction
+func (skey *Starskey) BeginTxn() *Txn {
+	return &Txn{
+		operations: make([]*TxnOperation, 0),
+		lock:       &sync.Mutex{},
+		db:         skey,
+	}
+}
+
+// Get retrieves a key-value pair from a transaction
+func (txn *Txn) Get(key []byte) ([]byte, error) {
+	// We validate the key
+	if len(key) == 0 {
+		return nil, errors.New("key cannot be empty")
 	}
 
-	log.Println("Closed WAL")
+	// Lock for thread safety
+	txn.lock.Lock()
+	defer txn.lock.Unlock()
 
-	log.Println("Closing levels")
+	// Check if the key is in the transaction operations
+	for _, op := range txn.operations {
+		if bytes.Equal(op.key, key) {
+			if op.op == Delete {
+				return nil, nil // Key is marked for deletion
+			}
+			return op.value, nil
+		}
+	}
 
-	for _, level := range skey.levels {
-		log.Println("Closing level", level.id)
-		for _, sstable := range level.sstables {
-			if err := sstable.klog.Close(); err != nil {
-				return err
+	// If not found in transaction, check the database
+	value, err := txn.db.Get(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return value, nil
+}
+
+// Put puts a key-value pair into the database from a transaction
+func (txn *Txn) Put(key, value []byte) {
+	txn.lock.Lock()
+	defer txn.lock.Unlock()
+
+	txn.operations = append(txn.operations, &TxnOperation{
+		key:      key,
+		value:    value,
+		op:       Put,
+		commited: false,
+		rollback: &TxnRollbackOperation{
+			key:   key,
+			value: Tombstone,
+			op:    Delete,
+		},
+	})
+}
+
+// Delete deletes a key from the database from a transaction
+func (txn *Txn) Delete(key []byte) {
+	// Lock for thread safety
+	txn.lock.Lock()
+	defer txn.lock.Unlock()
+
+	currentValue, exists := txn.db.memtable.Get(key)
+	if exists {
+		txn.operations = append(txn.operations, &TxnOperation{
+			key:      key,
+			value:    currentValue.Value,
+			op:       Delete,
+			commited: false,
+			rollback: &TxnRollbackOperation{
+				key:   key,
+				value: currentValue.Value,
+				op:    Put,
+			},
+		})
+		return
+	}
+	txn.operations = append(txn.operations, &TxnOperation{
+		key:      key,
+		value:    Tombstone,
+		op:       Delete,
+		commited: false,
+		rollback: nil,
+	})
+}
+
+// Commit commits a transaction
+func (txn *Txn) Commit() error {
+	// Lock for thread safety
+	txn.db.lock.Lock()
+	defer txn.db.lock.Unlock()
+	txn.lock.Lock()
+	defer txn.lock.Unlock()
+
+	for _, op := range txn.operations {
+		var record *WALRecord
+		switch op.op {
+		case Put:
+			// Create a WAL record
+			record = &WALRecord{
+				Key:   op.key,
+				Value: op.value,
+				Op:    Put,
 			}
-			if err := sstable.vlog.Close(); err != nil {
-				return err
+
+		case Delete:
+			record = &WALRecord{
+				Key:   op.key,
+				Value: op.value,
+				Op:    Delete,
 			}
+		case Get:
+			continue
 		}
 
-		log.Println("Level", level.id, "closed")
+		// Append to WAL
+		err := txn.db.appendToWal(record)
+		if err != nil {
+			_ = txn.Rollback()
+			return err
+		}
+
+		// Escalate write
+		txn.db.wal.EscalateFSync()
+
+		// Put the key-value pair into the memtable
+		err = txn.db.memtable.Put(op.key, op.value)
+		if err != nil {
+			_ = txn.Rollback()
+			return err
+		}
+
+		op.commited = true
+
 	}
 
-	log.Println("Levels closed")
-
-	log.Println("Starskey closed")
-
-	if skey.logFile != nil {
-		if err := skey.logFile.Close(); err != nil {
+	if txn.db.memtable.SizeOfTree >= txn.db.config.FlushThreshold {
+		// Sorted run to level 1
+		if err := txn.db.run(); err != nil {
+			_ = txn.Rollback()
 			return err
 		}
 	}
 
 	return nil
+
 }
 
-// serializeWalRecord serializes a WAL record
-func serializeWalRecord(record *WALRecord, compress bool, option CompressionOption) ([]byte, error) {
-	data, err := bson.Marshal(record)
+// Update runs a function within a transaction.
+func (skey *Starskey) Update(fn func(tx *Txn) error) error {
+	// Begin a new transaction
+	txn := skey.BeginTxn()
+	if txn == nil {
+		return errors.New("failed to begin transaction")
+	}
+
+	// Call the provided function with the transaction
+	err := fn(txn)
 	if err != nil {
-		return nil, err
+		// If the function returns an error, roll back the transaction..
+		if rollbackErr := txn.Rollback(); rollbackErr != nil {
+			return fmt.Errorf("transaction rollback failed: %v, original error: %v", rollbackErr, err)
+		}
+		return err
 	}
 
-	if compress {
-		switch option {
-		case SnappyCompression:
-			compressedData := snappy.Encode(nil, data)
-			return compressedData, nil
-		case S2Compression:
-			compressedData := s2.Encode(nil, data)
-			return compressedData, nil
-		default:
-			return nil, nil
-		}
+	// If the function succeeds, commit the transaction
+	if commitErr := txn.Commit(); commitErr != nil {
+		return fmt.Errorf("transaction commit failed: %v", commitErr)
 	}
-	return data, nil
+
+	return nil
 }
 
-// deserializeWalRecord deserializes a WAL record
-func deserializeWalRecord(data []byte, decompress bool, option CompressionOption) (*WALRecord, error) {
-	if decompress {
-		switch option {
-		case SnappyCompression:
-			decompressedData, err := snappy.Decode(nil, data)
-			if err != nil {
-				log.Fatal("Error decompressing data:", err)
-			}
-			data = decompressedData
-		case S2Compression:
-			decompressedData, err := s2.Decode(nil, data)
-			if err != nil {
-				log.Fatal("Error decompressing data:", err)
-			}
-			data = decompressedData
-		}
-	}
+// Rollback rolls back a transaction
+func (txn *Txn) Rollback() error {
+	// Lock for thread safety
+	txn.db.lock.Lock()
+	defer txn.db.lock.Unlock()
+	txn.lock.Lock()
+	defer txn.lock.Unlock()
 
-	var record WALRecord
-	err := bson.Unmarshal(data, &record)
-	if err != nil {
-		return nil, err
-	}
-	return &record, nil
-}
+	for _, op := range txn.operations {
+		if op.commited {
+			if op.rollback != nil {
+				// Create a WAL record
+				record := &WALRecord{
+					Key:   op.rollback.key,
+					Value: op.rollback.value,
+					Op:    op.rollback.op,
+				}
 
-// serializeKLogRecord serializes a key log record
-func serializeKLogRecord(record *KLogRecord, compress bool, option CompressionOption) ([]byte, error) {
-	data, err := bson.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
+				// Serialize the WAL record
+				walSerialized, err := serializeWalRecord(record, txn.db.config.Compression, txn.db.config.CompressionOption)
+				if err != nil {
+					return err
+				}
 
-	if compress {
-		switch option {
-		case SnappyCompression:
-			compressedData := snappy.Encode(nil, data)
-			return compressedData, nil
-		case S2Compression:
-			compressedData := s2.Encode(nil, data)
-			return compressedData, nil
-		default:
-			return nil, nil
-		}
-	}
-	return data, nil
-}
+				// Write the WAL record to the write-ahead log
+				if _, err = txn.db.wal.Write(walSerialized); err != nil {
+					return err
+				}
 
-// deserializeKLogRecord deserializes a key log record
-func deserializeKLogRecord(data []byte, decompress bool, option CompressionOption) (*KLogRecord, error) {
-	if decompress {
-		switch option {
-		case SnappyCompression:
-			decompressedData, err := snappy.Decode(nil, data)
-			if err != nil {
-				log.Fatal("Error decompressing data:", err)
+				// Put the key-value pair into the memtable
+				err = txn.db.memtable.Put(op.rollback.key, op.rollback.value)
+				if err != nil {
+					return err
+				}
 			}
-			data = decompressedData
-		case S2Compression:
-			decompressedData, err := s2.Decode(nil, data)
-			if err != nil {
-				log.Fatal("Error decompressing data:", err)
-			}
-			data = decompressedData
 		}
 	}
 
-	var record KLogRecord
-	err := bson.Unmarshal(data, &record)
-	if err != nil {
-		return nil, err
-	}
-	return &record, nil
-}
-
-// serializeVLogRecord serializes a value log record
-func serializeVLogRecord(record *VLogRecord, compress bool, option CompressionOption) ([]byte, error) {
-	data, err := bson.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
-
-	if compress {
-		switch option {
-		case SnappyCompression:
-			compressedData := snappy.Encode(nil, data)
-			return compressedData, nil
-		case S2Compression:
-			compressedData := s2.Encode(nil, data)
-			return compressedData, nil
-		default:
-			return nil, nil
-		}
-	}
-	return data, nil
-}
-
-// deserializeVLogRecord deserializes a value log record
-func deserializeVLogRecord(data []byte, decompress bool, option CompressionOption) (*VLogRecord, error) {
-	if decompress {
-		switch option {
-		case SnappyCompression:
-			decompressedData, err := snappy.Decode(nil, data)
-			if err != nil {
-				log.Fatal("Error decompressing data:", err)
-			}
-			data = decompressedData
-		case S2Compression:
-			decompressedData, err := s2.Decode(nil, data)
-			if err != nil {
-				log.Fatal("Error decompressing data:", err)
-			}
-			data = decompressedData
-		}
-	}
-
-	var record VLogRecord
-	err := bson.Unmarshal(data, &record)
-	if err != nil {
-		return nil, err
-	}
-	return &record, nil
-
+	return nil
 }
 
 // openLevels opens disk levels and their SSTables and returns a slice of Level
@@ -1353,9 +1257,9 @@ func (lvl *Level) shouldCompact() bool {
 
 // iteratorWithData pairs with mergeTables method
 type iteratorWithData struct {
-	iterator *pager.Iterator
-	hasMore  bool
-	current  *KLogRecord
+	iterator *pager.Iterator // Iterator for the key log
+	hasMore  bool            // If there are more records in the iterator
+	current  *KLogRecord     // Current record in the iterator
 }
 
 // mergeTables merges SSTables and returns a new SSTable
@@ -1370,7 +1274,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 		return nil
 	}
 
-	// Create a new SSTable
+	// Create a new SSTable which is the merged of all SSTables provided
 	sstable := &SSTable{
 		klog: nil,
 		vlog: nil,
@@ -1392,6 +1296,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 		return nil
 	}
 
+	// Set the key log and value log
 	sstable.klog = klog
 	sstable.vlog = vlog
 
@@ -1421,7 +1326,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 	}
 
 	for {
-		// Find smallest key among all active iterators
+		// Find the smallest key among all active iterators
 		smallestIdx := -1
 		for i, it := range iterators {
 			if !it.hasMore {
@@ -1618,4 +1523,193 @@ func (sst *SSTable) createBloomFilter(skey *Starskey) error {
 	}
 
 	return nil
+}
+
+// serializeWalRecord serializes a WAL record
+func serializeWalRecord(record *WALRecord, compress bool, option CompressionOption) ([]byte, error) {
+	if record == nil {
+		return nil, errors.New("record is nil")
+	}
+
+	// We marshal the record
+	data, err := bson.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+
+	// We check if compression is enabled
+	if compress {
+		// If so we compress the data based on the compression option
+		switch option {
+		case SnappyCompression:
+			compressedData := snappy.Encode(nil, data)
+			return compressedData, nil
+		case S2Compression:
+			compressedData := s2.Encode(nil, data)
+			return compressedData, nil
+		default:
+			return nil, nil
+		}
+	}
+	return data, nil
+}
+
+// deserializeWalRecord deserializes a WAL record
+func deserializeWalRecord(data []byte, decompress bool, option CompressionOption) (*WALRecord, error) {
+	if len(data) == 0 {
+		return nil, errors.New("data is empty")
+	}
+
+	// We check if compression is enabled
+	if decompress {
+		// If so we decompress the data based on the compression option
+		switch option {
+		case SnappyCompression:
+			decompressedData, err := snappy.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
+		case S2Compression:
+			decompressedData, err := s2.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
+		}
+	}
+
+	var record WALRecord
+	err := bson.Unmarshal(data, &record)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+// serializeKLogRecord serializes a key log record
+func serializeKLogRecord(record *KLogRecord, compress bool, option CompressionOption) ([]byte, error) {
+	if record == nil {
+		return nil, errors.New("record is nil")
+	}
+
+	// We marshal the record
+	data, err := bson.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+
+	// We check if compression is enabled
+	if compress {
+		// If so we compress the data based on the compression option
+		switch option {
+		case SnappyCompression:
+			compressedData := snappy.Encode(nil, data)
+			return compressedData, nil
+		case S2Compression:
+			compressedData := s2.Encode(nil, data)
+			return compressedData, nil
+		default:
+			return nil, nil
+		}
+	}
+	return data, nil
+}
+
+// deserializeKLogRecord deserializes a key log record
+func deserializeKLogRecord(data []byte, decompress bool, option CompressionOption) (*KLogRecord, error) {
+	if len(data) == 0 {
+		return nil, errors.New("data is empty")
+	}
+
+	// We check if compression is enabled
+	if decompress {
+		// If so we decompress the data based on the compression option
+		switch option {
+		case SnappyCompression:
+			decompressedData, err := snappy.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
+		case S2Compression:
+			decompressedData, err := s2.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
+		}
+	}
+
+	var record KLogRecord
+	err := bson.Unmarshal(data, &record)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+// serializeVLogRecord serializes a value log record
+func serializeVLogRecord(record *VLogRecord, compress bool, option CompressionOption) ([]byte, error) {
+	if record == nil {
+		return nil, errors.New("record is nil")
+	}
+
+	// We marshal the record
+	data, err := bson.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+
+	// We check if compression is enabled
+	if compress {
+		// If so we compress the data based on the compression option
+		switch option {
+		case SnappyCompression:
+			compressedData := snappy.Encode(nil, data)
+			return compressedData, nil
+		case S2Compression:
+			compressedData := s2.Encode(nil, data)
+			return compressedData, nil
+		default:
+			return nil, nil
+		}
+	}
+	return data, nil
+}
+
+// deserializeVLogRecord deserializes a value log record
+func deserializeVLogRecord(data []byte, decompress bool, option CompressionOption) (*VLogRecord, error) {
+	if len(data) == 0 {
+		return nil, errors.New("data is empty")
+	}
+
+	// We check if compression is enabled
+	if decompress {
+		// If so we decompress the data
+		switch option {
+		case SnappyCompression:
+			decompressedData, err := snappy.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
+		case S2Compression:
+			decompressedData, err := s2.Decode(nil, data)
+			if err != nil {
+				log.Fatal("Error decompressing data:", err)
+			}
+			data = decompressedData
+		}
+	}
+
+	var record VLogRecord
+
+	// We unmarshal the data into a VLogRecord
+	err := bson.Unmarshal(data, &record)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+
 }

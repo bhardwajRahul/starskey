@@ -52,6 +52,15 @@ func TestSerializeDeserializeWalRecord(t *testing.T) {
 	}
 }
 
+func TestSerializeDeserializeWalRecordInvalid(t *testing.T) {
+	_, err := serializeWalRecord(nil, false, NoCompression)
+	if err == nil {
+		t.Fatalf("Failed to serialize WAL record: %v", err)
+
+	}
+
+}
+
 func TestSerializeDeserializeKLogRecord(t *testing.T) {
 	originalRecord := &KLogRecord{
 		Key:        []byte("testKey"),
@@ -77,6 +86,15 @@ func TestSerializeDeserializeKLogRecord(t *testing.T) {
 	}
 }
 
+func TestSerializeDeserializeKLogRecordInvalid(t *testing.T) {
+	_, err := serializeKLogRecord(nil, false, NoCompression)
+	if err == nil {
+		t.Fatalf("Failed to serialize KLog record: %v", err)
+
+	}
+
+}
+
 func TestSerializeDeserializeVLogRecord(t *testing.T) {
 	originalRecord := &VLogRecord{
 		Value: []byte("testValue"),
@@ -98,6 +116,15 @@ func TestSerializeDeserializeVLogRecord(t *testing.T) {
 	if !reflect.DeepEqual(originalRecord, deserializedRecord) {
 		t.Errorf("Deserialized record does not match the original record.\nOriginal: %+v\nDeserialized: %+v", originalRecord, deserializedRecord)
 	}
+}
+
+func TestSerializeDeserializeVLogRecordInvalid(t *testing.T) {
+	_, err := serializeVLogRecord(nil, false, NoCompression)
+	if err == nil {
+		t.Fatalf("Failed to serialize VLog record: %v", err)
+
+	}
+
 }
 
 func TestSerializeDeserializeWalRecordCompress(t *testing.T) {
@@ -199,6 +226,39 @@ func TestOpen(t *testing.T) {
 	}
 }
 
+func TestOpenInvalid(t *testing.T) {
+	os.RemoveAll("test")
+	defer os.RemoveAll("test")
+
+	_, err := Open(nil)
+	if err == nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+
+	}
+}
+
+func TestOpenInvalidCompression(t *testing.T) {
+	os.RemoveAll("test")
+	defer os.RemoveAll("test")
+
+	config := &Config{
+		Permission:        0755,
+		Directory:         "test",
+		FlushThreshold:    1024 * 1024,
+		MaxLevel:          3,
+		SizeFactor:        10,
+		BloomFilter:       false,
+		Compression:       true,
+		CompressionOption: NoCompression,
+	}
+
+	_, err := Open(config)
+	if err == nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+
+	}
+}
+
 func TestStarskey_Put(t *testing.T) {
 	_ = os.RemoveAll("test")
 	defer func() {
@@ -254,6 +314,40 @@ func TestStarskey_Put(t *testing.T) {
 
 	if err := starskey.Close(); err != nil {
 		t.Fatalf("Failed to close starskey: %v", err)
+	}
+
+}
+
+func TestStarskey_Put_Invalid(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	// Define a valid configuration
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+		Logging:        false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	err = starskey.Put(nil, nil)
+	if err == nil {
+		t.Fatalf("Failed to put key-value pair: %v", err)
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+
 	}
 
 }
@@ -710,6 +804,38 @@ func TestStarskey_FilterKeys(t *testing.T) {
 	}
 }
 
+func TestStarskey_FilterKeys_Invalid(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Test invalid compare function
+	_, err = starskey.FilterKeys(nil)
+	if err == nil {
+		t.Fatalf("Failed to filter: %v", err)
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+
+}
+
 func TestStarskey_Range(t *testing.T) {
 	_ = os.RemoveAll("test")
 	defer func() {
@@ -758,6 +884,99 @@ func TestStarskey_Range(t *testing.T) {
 			t.Fatalf("Value does not match expected value")
 		}
 
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
+func TestStarskey_Range_Invalid(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Test invalid range
+	_, err = starskey.Range([]byte("key900"), []byte("key800"))
+	if err == nil {
+		t.Fatalf("Failed to range: %v", err)
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
+func TestStarskey_Range_Invalid2(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Test invalid range
+	_, err = starskey.Range(nil, nil)
+	if err == nil {
+		t.Fatalf("Failed to range: %v", err)
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
+func TestStarskey_Delete_Invalid(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Test invalid delete
+	err = starskey.Delete(nil)
+	if err == nil {
+		t.Fatalf("Failed to delete key: %v", err)
 	}
 
 	if err := starskey.Close(); err != nil {
