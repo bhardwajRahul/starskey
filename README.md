@@ -7,7 +7,7 @@
 Starskey is a fast embedded key-value store package for GO!  Starskey implements a multi-level, durable log structured merge tree.
 
 ## Features
-- **Levelled partial merge compaction**  Compactions occur on writes, if any disk level reaches it's max size half of the sstables are merged into a new sstable and placed into the next level.  This algorithm is recursive until last level.  At last level if full we merge all sstables into a new sstable.
+- **Levelled partial merge compaction**  Compactions occur on writes, if any disk level reaches it's max size half of the sstables are merged into a new sstable and placed into the next level.  This algorithm is recursive until last level.  At last level if full we merge all sstables into a new sstable.  During merge operations tombstones(deleted keys) are removed.
 - **Simple API** with Put, Get, Delete, Range, FilterKeys, Update (for txns)
 - **Atomic transactions** You can group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed transactions roll back.
 - **Configurable options** You can configure many options such as max levels, memtable threshold, bloom filter, and more.
