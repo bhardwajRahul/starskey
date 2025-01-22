@@ -200,6 +200,79 @@ func TestSerializeDeserializeVLogRecordCompress(t *testing.T) {
 	}
 }
 
+func TestSerializeDeserializeWalRecordCompress_S2(t *testing.T) {
+	originalRecord := &WALRecord{
+		Key:   []byte("testKey"),
+		Value: []byte("testValue"),
+		Op:    Put,
+	}
+
+	// Serialize the original record
+	serializedData, err := serializeWalRecord(originalRecord, true, S2Compression)
+	if err != nil {
+		t.Fatalf("Failed to serialize WAL record: %v", err)
+	}
+
+	// Deserialize the data back into a WALRecord
+	deserializedRecord, err := deserializeWalRecord(serializedData, true, S2Compression)
+	if err != nil {
+		t.Fatalf("Failed to deserialize WAL record: %v", err)
+	}
+
+	// Check if the deserialized record matches the original record
+	if !reflect.DeepEqual(originalRecord, deserializedRecord) {
+		t.Errorf("Deserialized record does not match the original record.\nOriginal: %+v\nDeserialized: %+v", originalRecord, deserializedRecord)
+	}
+}
+
+func TestSerializeDeserializeKLogRecordCompress_S2(t *testing.T) {
+	originalRecord := &KLogRecord{
+		Key:        []byte("testKey"),
+		ValPageNum: 12345,
+	}
+
+	// Serialize the original record
+	serializedData, err := serializeKLogRecord(originalRecord, true, S2Compression)
+	if err != nil {
+		t.Fatalf("Failed to serialize KLog record: %v", err)
+	}
+
+	// Deserialize the data back into a KLogRecord
+	deserializedRecord, err := deserializeKLogRecord(serializedData, true, S2Compression)
+	if err != nil {
+		t.Fatalf("Failed to deserialize KLog record: %v", err)
+
+	}
+
+	// Check if the deserialized record matches the original record
+	if !reflect.DeepEqual(originalRecord, deserializedRecord) {
+		t.Errorf("Deserialized record does not match the original record.\nOriginal: %+v\nDeserialized: %+v", originalRecord, deserializedRecord)
+	}
+}
+
+func TestSerializeDeserializeVLogRecordCompress_S2(t *testing.T) {
+	originalRecord := &VLogRecord{
+		Value: []byte("testValue"),
+	}
+
+	// Serialize the original record
+	serializedData, err := serializeVLogRecord(originalRecord, true, S2Compression)
+	if err != nil {
+		t.Fatalf("Failed to serialize VLog record: %v", err)
+	}
+
+	// Deserialize the data back into a VLogRecord
+	deserializedRecord, err := deserializeVLogRecord(serializedData, true, S2Compression)
+	if err != nil {
+		t.Fatalf("Failed to deserialize VLog record: %v", err)
+	}
+
+	// Check if the deserialized record matches the original record
+	if !reflect.DeepEqual(originalRecord, deserializedRecord) {
+		t.Errorf("Deserialized record does not match the original record.\nOriginal: %+v\nDeserialized: %+v", originalRecord, deserializedRecord)
+	}
+}
+
 func TestOpen(t *testing.T) {
 	os.RemoveAll("test")
 	defer os.RemoveAll("test")
