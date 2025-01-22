@@ -220,6 +220,19 @@ func TestOpen(t *testing.T) {
 		t.Fatalf("Failed to open starskey: %v", err)
 	}
 
+	// We verify the db directory is created with configured levels within
+	for i := uint64(0); i < config.MaxLevel; i++ {
+		if _, err := os.Stat(fmt.Sprintf("%s%sl%d", config.Directory, string(os.PathSeparator), i+1)); os.IsNotExist(err) {
+			t.Fatalf("Failed to create directory for level %d", i)
+		}
+
+	}
+
+	// Check if WAL exists
+	if _, err := os.Stat(fmt.Sprintf("%s%s%s", config.Directory, string(os.PathSeparator), WALExtension)); os.IsNotExist(err) {
+		t.Fatalf("Failed to create WAL file")
+	}
+
 	// Close starskey
 	if err := starskey.Close(); err != nil {
 		t.Fatalf("Failed to close starskey: %v", err)

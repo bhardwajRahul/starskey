@@ -41,7 +41,7 @@ var (
 	KLogExtension          = ".klog"                        // key log extension
 	LogExtension           = ".log"                         // debug log extension
 	BloomFilterExtension   = ".bf"                          // bloom filter extension
-	SSTPrefix              = "sst"                          // SSTable prefix
+	SSTPrefix              = "sst_"                         // SSTable prefix
 	LevelPrefix            = "l"                            // Level prefix
 	PageSize               = 128                            // Page size, smaller is better.  The pager handles overflowing in sequence. 1024, or 1024 will cause VERY large files.
 	SyncInterval           = time.Millisecond * 512         // File sync interval
@@ -998,13 +998,14 @@ func (skey *Starskey) run() error {
 
 	ti := time.Now()
 	// Create a new key log
-	klog, err := pager.Open(fmt.Sprintf("%sl1%s%s_%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), KLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	// i.e db_directory/l1/sst_1612345678.klog
+	klog, err := pager.Open(fmt.Sprintf("%sl1%s%s%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), KLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
 	if err != nil {
 		return err
 	}
 
 	// Create a new value log
-	vlog, err := pager.Open(fmt.Sprintf("%sl1%s%s_%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), VLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	vlog, err := pager.Open(fmt.Sprintf("%sl1%s%s%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), VLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
 	if err != nil {
 		_ = klog.Close()
 		_ = os.Remove(klog.Name())
@@ -1015,7 +1016,7 @@ func (skey *Starskey) run() error {
 
 	// If bloom is enabled we create bloom filter and write it to page 0 on klog
 	if skey.config.BloomFilter {
-		bloomFilterFile, err = os.OpenFile(fmt.Sprintf("%sl1%s%s_%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), BloomFilterExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission)
+		bloomFilterFile, err = os.OpenFile(fmt.Sprintf("%sl1%s%s%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), BloomFilterExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission)
 		if err != nil {
 			_ = klog.Close()
 			_ = vlog.Close()
@@ -1283,13 +1284,13 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 	ti := time.Now()
 
 	// Create a new key log
-	klog, err := pager.Open(fmt.Sprintf("%sl%d%s%s_%d%s", skey.config.Directory, level+1, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), KLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	klog, err := pager.Open(fmt.Sprintf("%sl%d%s%s%d%s", skey.config.Directory, level+1, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), KLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
 	if err != nil {
 		return nil
 	}
 
 	// Create a new value log
-	vlog, err := pager.Open(fmt.Sprintf("%sl%d%s%s_%d%s", skey.config.Directory, level+1, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), VLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	vlog, err := pager.Open(fmt.Sprintf("%sl%d%s%s%d%s", skey.config.Directory, level+1, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), VLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
 	if err != nil {
 		_ = klog.Close()
 		_ = os.Remove(klog.Name())
