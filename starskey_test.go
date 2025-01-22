@@ -23,6 +23,7 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -255,6 +256,85 @@ func TestStarskey_Put(t *testing.T) {
 		t.Fatalf("Failed to close starskey: %v", err)
 	}
 
+}
+
+func TestStarskey_Put_Get_Concurrent(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	// Define a valid configuration
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+		Logging:        false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	var size int
+	var mu sync.Mutex
+
+	routines := 10
+	batch := 2000 / routines
+	wg := &sync.WaitGroup{}
+
+	// Concurrently put key-value pairs
+	for i := 0; i < routines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < batch; j++ {
+				key := []byte(fmt.Sprintf("key%03d", i*batch+j))
+				value := []byte(fmt.Sprintf("value%03d", i*batch+j))
+
+				if err := starskey.Put(key, value); err != nil {
+					t.Fatalf("Failed to put key-value pair: %v", err)
+				}
+
+				mu.Lock()
+				size += len(key) + len(value)
+				mu.Unlock()
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Concurrently get and check key-value pairs
+	for i := 0; i < routines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < batch; j++ {
+				key := []byte(fmt.Sprintf("key%03d", i*batch+j))
+				expectedValue := []byte(fmt.Sprintf("value%03d", i*batch+j))
+
+				val, err := starskey.Get(key)
+				if err != nil {
+					t.Fatalf("Failed to get key-value pair: %v", err)
+				}
+
+				if !reflect.DeepEqual(val, expectedValue) {
+					t.Fatalf("Value does not match expected value for key %s: got %s, want %s", key, val, expectedValue)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
 }
 
 func TestStarskey_BeginTxn(t *testing.T) {
