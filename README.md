@@ -95,7 +95,7 @@ if err != nil {
 ```
 
 
-## Atomic Transactions
+## Acid Transactions
 Using atomic transactions to group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed transactions roll back.
 ```go
 txn := starskey.BeginTxn()
@@ -111,7 +111,7 @@ if err := txn.Commit(); err != nil {
 }
 ```
 
-OR
+**OR**
 
 ```go
 err = starskey.Update(func(txn *Txn) error {
@@ -140,5 +140,6 @@ If a key is deleted it will live on the same way until it reaches last level at 
 
 ## Memory and disk sorting
 Sorting would be lexicographical (alphabetical), meaning it will sort based on the byte-by-byte comparisons of slices.
+We use bytes.Compare to sort keys in memory and on disk.
 
 
