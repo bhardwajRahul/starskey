@@ -128,3 +128,12 @@ if err := starskey.Delete([]byte("key")); err != nil {
     t.Fatalf("Failed to delete key: %v", err)
 }
 ```
+
+## Key Lifecycle
+A key once inserted will live in the memtable until it is flushed to disk.
+Once flushed to disk it will live in an sstable at l1 until it is compacted.  Once compacted it will be merged into a new sstable at the next level.  This process is recursive until the last level.  At the last level if full we merge all sstables into a new sstable.
+
+## Memory and disk sorting
+Sorting would be lexicographical (alphabetical), meaning it will sort based on the byte-by-byte comparisons of slices.
+
+
