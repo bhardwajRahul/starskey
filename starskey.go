@@ -1364,20 +1364,22 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 		}
 
 		if bytes.Equal(vlogRecord.Value, Tombstone) {
-			// We skip the tombstone
-			iterators[smallestIdx].hasMore = iterators[smallestIdx].iterator.Next()
-			if iterators[smallestIdx].hasMore {
-				deserializedKLogRecord, err := deserializeKLogRecord(iterators[smallestIdx].iterator.CurrentData, skey.config.Compression, skey.config.CompressionOption)
-				if err != nil {
-					_ = klog.Close()
-					_ = vlog.Close()
-					_ = os.Remove(klog.Name())
-					_ = os.Remove(vlog.Name())
-					return nil
+			// Skip tombstones only if not at the last level
+			if level < int(skey.config.MaxLevel)-1 {
+				iterators[smallestIdx].hasMore = iterators[smallestIdx].iterator.Next()
+				if iterators[smallestIdx].hasMore {
+					deserializedKLogRecord, err := deserializeKLogRecord(iterators[smallestIdx].iterator.CurrentData, skey.config.Compression, skey.config.CompressionOption)
+					if err != nil {
+						_ = klog.Close()
+						_ = vlog.Close()
+						_ = os.Remove(klog.Name())
+						_ = os.Remove(vlog.Name())
+						return nil
+					}
+					iterators[smallestIdx].current = deserializedKLogRecord
 				}
-				iterators[smallestIdx].current = deserializedKLogRecord
+				continue
 			}
-			continue
 		}
 
 		// Then we write it to new value log
@@ -1438,7 +1440,6 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 				return nil
 			}
 			it.current = deserializedKLogRecord
-
 		}
 	}
 

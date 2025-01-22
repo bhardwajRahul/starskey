@@ -9,15 +9,15 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 ## Features
 - **Levelled partial merge compaction**  Compactions occur on writes, if any disk level reaches it's max size half of the sstables are merged into a new sstable and placed into the next level.  This algorithm is recursive until last level.  At last level if full we merge all sstables into a new sstable.  During merge operations tombstones(deleted keys) are removed.
 - **Simple API** with Put, Get, Delete, Range, FilterKeys, Update (for txns)
-- **Atomic transactions** You can group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed transactions roll back.
-- **Configurable options** You can configure many options such as max levels, memtable threshold, bloom filter, and more.
+- **Acid transactions** You can group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed transactions roll back.
+- **Configurable options** You can configure many options such as max levels, memtable threshold, bloom filter, logging, compression and more.
 - **WAL with recovery** Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
 - **Key value separation** Keys and values are stored separately for sstables within a klog and vlog respectively.
 - **Bloom filters** Each sstable has an in memory bloom filter to reduce disk reads.
 - **Fast** up to 400k+ ops per second.
 - **Compression** S2, and Snappy compression is available.
-- **Logging** Logging to file is available.
-- **Thread safe** Starskey is thread safe.
+- **Logging** Logging to file is available.  Will write to standard out if not enabled.
+- **Thread safe** Starskey is thread safe.  Multiple goroutines can read and write to Starskey concurrently.
 
 ## Bench
 Use the benchmark program at [bench](https://github.com/starskey-io/bench) to compare Starskey with other popular key value stores/engines.
@@ -135,6 +135,8 @@ if err := starskey.Delete([]byte("key")); err != nil {
 ## Key Lifecycle
 A key once inserted will live in the memtable until it is flushed to disk.
 Once flushed to disk it will live in an sstable at l1 until it is compacted.  Once compacted it will be merged into a new sstable at the next level.  This process is recursive until the last level.  At the last level if full we merge all sstables into a new sstable.
+
+If a key is deleted it will live on the same way until it reaches last level at which point it will be removed entirely.
 
 ## Memory and disk sorting
 Sorting would be lexicographical (alphabetical), meaning it will sort based on the byte-by-byte comparisons of slices.
