@@ -24,59 +24,66 @@ Use the benchmark program at [bench](https://github.com/starskey-io/bench) to co
 
 ## Basic Example
 Below is a basic example of how to use starskey.
+
+**Mind you examples use skey as the variable name for opened starskey instance(s).**
+
 ```go
 import (
     "github.com/starskey-io/starskey"
+    "log"
 )
 
-starskey, err := Open(&Config{
-        Permission:        0755,                 // Dir, file permission
-        Directory:         "db_dir",             // Directory to store data
-        FlushThreshold:    (1024 * 1024) * 24,   // 24mb Flush threshold in bytes
-        MaxLevel:          3,                    // Max levels number of disk levels
-        SizeFactor:        10,                   // Size factor for each level.  Say 10 that's 10 * the FlushThreshold at each level. So level 1 is 10MB, level 2 is 100MB, level 3 is 1GB.
-        BloomFilter:       false,                // If you want to use bloom filters
-        Logging:           true,                 // Enable logging to file
-        Compression:       false,                // Enable compression
-        CompressionOption: NoCompression,        // Or SnappyCompression, S2Compression
-    })                                           // Config cannot be nil**
-if err != nil {
-    t.Fatalf("Failed to open starskey: %v", err)
+func main() {
+    skey, err := starskey.Open(&starskey.Config{
+        Permission:        0755,                   // Dir, file permission
+        Directory:         "db_dir",               // Directory to store data
+        FlushThreshold:    (1024 * 1024) * 24,     // 24mb Flush threshold in bytes
+        MaxLevel:          3,                      // Max levels number of disk levels
+        SizeFactor:        10,                     // Size factor for each level.  Say 10 that's 10 * the FlushThreshold at each level. So level 1 is 10MB, level 2 is 100MB, level 3 is 1GB.
+        BloomFilter:       false,                  // If you want to use bloom filters
+        Logging:           true,                   // Enable logging to file
+        Compression:       false,                  // Enable compression
+        CompressionOption: starskey.NoCompression, // Or SnappyCompression, S2Compression
+        }) // Config cannot be nil**
+    if err != nil {
+        log.Fatalf("Failed to open starskey: %v", err)
+    }
+
+    // Close starskey
+    if err := skey.Close(); err != nil {
+        log.Fatalf("Failed to close starskey: %v", err)
+    }
+
+    key := []byte("some_key")
+    value := []byte("some_value")
+
+    // Write key-value pair
+    if err := skey.Put(key, value); err != nil {
+        log.Fatalf("Failed to put key-value pair: %v", err)
+    }
+
+    // Read key-value pair
+    v, err := skey.Get(key)
+    if err != nil {
+        log.Fatalf("Failed to get key-value pair: %v", err)
+    }
+
+    // Value is nil if key does not exist
+    if v == nil {
+        log.Fatalf("Value is nil")
+    }
+
+    log.Println(string(key), string(v))
 }
 
-// Close starskey
-if err := starskey.Close(); err != nil {
-    t.Fatalf("Failed to close starskey: %v", err)
-}
-
-key := []byte("some_key")
-value := []byte("some_value")
-
-// Write key-value pair
-if err := starskey.Put(key, value); err != nil {
-    t.Fatalf("Failed to put key-value pair: %v", err)
-}
-
-// Read key-value pair
-v, err := starskey.Get(key)
-if err != nil {
-    t.Fatalf("Failed to get key-value pair: %v", err)
-}
-
-// Value is nil if key does not exist
-if v == nil {
-    t.Fatalf("Value is nil")
-}
-
-fmt.Println(string(key), string(v))
 ```
 
 ## Range Keys
 You can range over a min and max key to retrieve values.
 ```go
-results, err := starskey.Range([]byte("key900"), []byte("key980"))
+results, err := skey.Range([]byte("key900"), []byte("key980"))
 if err != nil {
-    t.Fatalf("Failed to range: %v", err)
+    log.Fatalf("Failed to range: %v", err)
 }
 ```
 
@@ -88,9 +95,9 @@ compareFunc := func(key []byte) bool {
     return bytes.HasPrefix(key, []byte("c"))
 }
 
-results, err := starskey.FilterKeys(compareFunc)
+results, err := skey.FilterKeys(compareFunc)
 if err != nil {
-    t.Fatalf("Failed to filter: %v", err)
+    log.Fatalf("Failed to filter: %v", err)
 }
 ```
 
@@ -98,37 +105,37 @@ if err != nil {
 ## Acid Transactions
 Using atomic transactions to group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed transactions roll back.
 ```go
-txn := starskey.BeginTxn()
+txn := skey.BeginTxn()
 if txn == nil {
-    t.Fatalf("Failed to begin transaction")
+    log.Fatalf("Failed to begin transaction")
 }
 
 txn.Put([]byte("key"), []byte("value"))
 // or txn.Delete([]byte("key"))
 
 if err := txn.Commit(); err != nil {
-    t.Fatalf("Failed to commit transaction: %v", err)
+    log.Fatalf("Failed to commit transaction: %v", err)
 }
 ```
 
 **OR**
 
 ```go
-err = starskey.Update(func(txn *Txn) error {
+err = skey.Update(func(txn *Txn) error {
     txn.Put([]byte("key"), []byte("value")) // or txn.Delete, txn.Get
     // ..
     return nil
 })
 if err != nil {
-    t.Fatalf("Failed to update: %v", err)
+    log.Fatalf("Failed to update: %v", err)
 }
 ```
 
 ## Delete
 Delete a key from starskey.
 ```go
-if err := starskey.Delete([]byte("key")); err != nil {
-    t.Fatalf("Failed to delete key: %v", err)
+if err := skey.Delete([]byte("key")); err != nil {
+    log.Fatalf("Failed to delete key: %v", err)
 }
 ```
 
