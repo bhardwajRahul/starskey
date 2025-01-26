@@ -158,6 +158,85 @@ func TestPagerIterator(t *testing.T) {
 	}
 }
 
+func TestPager_Truncate(t *testing.T) {
+	defer os.Remove("test.bin")
+	p, err := Open("test.bin", os.O_CREATE|os.O_RDWR, 0777, 1024, true, time.Millisecond*128)
+	if err != nil {
+		t.Errorf("Error opening file: %v", err)
+	}
+	defer p.Close()
+
+	_, err = p.Write([]byte("hello world"))
+	if err != nil {
+		t.Errorf("Error writing to file: %v", err)
+	}
+
+	err = p.Truncate()
+	if err != nil {
+		t.Errorf("Error truncating file: %v", err)
+	}
+
+	size := p.Size()
+	if size != 0 {
+		t.Errorf("Expected file size 0, got %d", size)
+	}
+}
+
+func TestPager_Size(t *testing.T) {
+	defer os.Remove("test.bin")
+	p, err := Open("test.bin", os.O_CREATE|os.O_RDWR, 0777, 1024, true, time.Millisecond*128)
+	if err != nil {
+		t.Errorf("Error opening file: %v", err)
+	}
+	defer p.Close()
+
+	_, err = p.Write([]byte("hello world"))
+	if err != nil {
+		t.Errorf("Error writing to file: %v", err)
+	}
+
+	size := p.Size()
+	if size <= 0 {
+		t.Errorf("Expected file size greater than 0, got %d", size)
+	}
+}
+
+func TestPager_EscalateFSync(t *testing.T) {
+	defer os.Remove("test.bin")
+	p, err := Open("test.bin", os.O_CREATE|os.O_RDWR, 0777, 1024, true, time.Millisecond*128)
+	if err != nil {
+		t.Errorf("Error opening file: %v", err)
+	}
+	defer p.Close()
+
+	_, err = p.Write([]byte("hello world"))
+	if err != nil {
+		t.Errorf("Error writing to file: %v", err)
+	}
+
+	p.EscalateFSync()
+	// No direct way to verify fsync
+}
+
+func TestPager_PageCount(t *testing.T) {
+	defer os.Remove("test.bin")
+	p, err := Open("test.bin", os.O_CREATE|os.O_RDWR, 0777, 4, true, time.Millisecond*128)
+	if err != nil {
+		t.Errorf("Error opening file: %v", err)
+	}
+	defer p.Close()
+
+	_, err = p.Write([]byte("hello world"))
+	if err != nil {
+		t.Errorf("Error writing to file: %v", err)
+	}
+
+	pageCount := p.PageCount()
+	if pageCount != 4 {
+		t.Errorf("Expected 4 pages, got %d", pageCount)
+	}
+}
+
 func BenchmarkPager_Write(b *testing.B) {
 	defer os.Remove("test.bin")
 	p, err := Open("test.bin", os.O_CREATE|os.O_RDWR, 0777, 128, true, time.Millisecond*128)

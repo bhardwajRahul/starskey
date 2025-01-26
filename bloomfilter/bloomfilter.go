@@ -20,6 +20,7 @@ package bloomfilter
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
 	"hash"
 	"hash/fnv"
 	"math"
@@ -35,7 +36,15 @@ type BloomFilter struct {
 }
 
 // New creates a new Bloom filter with an expected number of items and false positive rate
-func New(expectedItems uint, falsePositiveRate float64) *BloomFilter {
+func New(expectedItems uint, falsePositiveRate float64) (*BloomFilter, error) {
+	if expectedItems == 0 {
+		return nil, errors.New("expectedItems must be greater than 0")
+	}
+
+	if falsePositiveRate <= 0 || falsePositiveRate >= 1 {
+		return nil, errors.New("falsePositiveRate must be between 0 and 1")
+	}
+
 	size := optimalSize(expectedItems, falsePositiveRate)
 	hashCount := optimalHashCount(size, expectedItems)
 
@@ -50,7 +59,7 @@ func New(expectedItems uint, falsePositiveRate float64) *BloomFilter {
 		bf.hashFuncs[i] = fnv.New64a()
 	}
 
-	return bf
+	return bf, nil
 }
 
 // Add adds an item to the Bloom filter
@@ -68,9 +77,14 @@ func (bf *BloomFilter) Add(data []byte) {
 func (bf *BloomFilter) Contains(data []byte) bool {
 	for _, hf := range bf.hashFuncs {
 		hf.Reset()
-		hf.Write(data)
-		hash := hf.Sum64()
-		position := hash % uint64(bf.Size)
+
+		var err error
+		_, err = hf.Write(data)
+		if err != nil {
+			return false
+		}
+		h := hf.Sum64()
+		position := h % uint64(bf.Size)
 		if bf.Bitset[position/8]&(1<<(position%8)) == 0 {
 			return false // Definitely not in set
 		}

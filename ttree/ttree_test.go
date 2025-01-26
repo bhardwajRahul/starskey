@@ -170,6 +170,40 @@ func TestCountEntries(t *testing.T) {
 	}
 }
 
+func TestTTree_Update(t *testing.T) {
+	tree := New(12, 32)
+	tree.Put([]byte("a"), []byte("1"))
+	tree.Put([]byte("b"), []byte("2"))
+
+	err := tree.Put([]byte("b"), []byte("updated"))
+	if err != nil {
+		t.Errorf("Error updating key 'b': %v", err)
+	}
+
+	val, ok := tree.Get([]byte("b"))
+	if !ok {
+		t.Errorf("Expected to find key 'b'")
+	}
+
+	if string(val.Value) != "updated" {
+		t.Errorf("Expected value 'updated', got %s", val.Value)
+	}
+}
+
+func TestTTree_EmptyTree(t *testing.T) {
+	tree := New(12, 32)
+
+	_, ok := tree.Get([]byte("a"))
+	if ok {
+		t.Errorf("Expected not to find key 'a' in an empty tree")
+	}
+
+	count := tree.CountEntries()
+	if count != 0 {
+		t.Errorf("Expected 0 entries, got %d", count)
+	}
+}
+
 func BenchmarkTTree_Put(b *testing.B) {
 	tree := New(12, 32)
 	for i := 0; i < b.N; i++ {
