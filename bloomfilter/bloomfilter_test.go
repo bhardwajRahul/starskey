@@ -23,7 +23,11 @@ import (
 )
 
 func TestNewBloomFilter(t *testing.T) {
-	bf := New(1000, 0.01)
+	bf, err := New(1000, 0.01)
+	if err != nil {
+		t.Errorf("Error creating BloomFilter: %v", err)
+	}
+
 	if bf.Size == 0 {
 		t.Errorf("Expected non-zero size, got %d", bf.Size)
 	}
@@ -33,7 +37,10 @@ func TestNewBloomFilter(t *testing.T) {
 }
 
 func TestNewBloomFilterSerialization(t *testing.T) {
-	bf := New(1000, 0.01)
+	bf, err := New(1000, 0.01)
+	if err != nil {
+		t.Errorf("Error creating BloomFilter: %v", err)
+	}
 
 	for i := 0; i < 100; i++ {
 		bf.Add([]byte(fmt.Sprintf("testdata%d", i)))
@@ -64,7 +71,11 @@ func TestNewBloomFilterSerialization(t *testing.T) {
 }
 
 func TestAddAndContains(t *testing.T) {
-	bf := New(1000, 0.01)
+	bf, err := New(1000, 0.01)
+	if err != nil {
+		t.Errorf("Error creating BloomFilter: %v", err)
+	}
+
 	data := []byte("testdata")
 
 	bf.Add(data)
@@ -79,7 +90,11 @@ func TestAddAndContains(t *testing.T) {
 }
 
 func TestNewBloomFilterSerializationSize(t *testing.T) {
-	bf := New(1_000_000, 0.01)
+	bf, err := New(1_000_000, 0.01)
+	if err != nil {
+		t.Errorf("Error creating BloomFilter: %v", err)
+
+	}
 
 	for i := 0; i < 1_000_000; i++ {
 		bf.Add([]byte(fmt.Sprintf("testdata%d", i)))
@@ -95,7 +110,11 @@ func TestNewBloomFilterSerializationSize(t *testing.T) {
 }
 
 func BenchmarkAdd(b *testing.B) {
-	bf := New(1000, 0.01)
+	bf, err := New(1000, 0.01)
+	if err != nil {
+		b.Errorf("Error creating BloomFilter: %v", err)
+	}
+
 	data := []byte("testdata")
 
 	for i := 0; i < b.N; i++ {
@@ -104,7 +123,11 @@ func BenchmarkAdd(b *testing.B) {
 }
 
 func BenchmarkContains(b *testing.B) {
-	bf := New(1000, 0.01)
+	bf, err := New(1000, 0.01)
+	if err != nil {
+		b.Errorf("Error creating BloomFilter: %v", err)
+	}
+
 	data := []byte("testdata")
 	bf.Add(data)
 

@@ -1029,7 +1029,11 @@ func (skey *Starskey) run() error {
 
 		log.Printf("Creating bloom filter for run with %d entries\n", mtCount)
 
-		bf := bloomfilter.New(mtCount, BloomFilterProbability)
+		bf, err := bloomfilter.New(mtCount, BloomFilterProbability)
+		if err != nil {
+			return err
+		}
+
 		iter := skey.memtable.NewIterator(false)
 		for iter.Valid() {
 			if entry, ok := iter.Current(); ok {
@@ -1488,7 +1492,11 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 // createBloomFilter creates a bloom filter for the SSTable
 func (sst *SSTable) createBloomFilter(skey *Starskey) error {
 
-	sst.bloomfilter = bloomfilter.New(uint(sst.klog.PageCount()), BloomFilterProbability)
+	var err error
+	sst.bloomfilter, err = bloomfilter.New(uint(sst.klog.PageCount()), BloomFilterProbability)
+	if err != nil {
+		return err
+	}
 
 	// Open the bloom filter file
 	bfFile, err := os.OpenFile(fmt.Sprintf("%s%s", strings.TrimSuffix(sst.klog.Name(), KLogExtension), BloomFilterExtension), os.O_CREATE|os.O_RDWR, os.ModePerm)
