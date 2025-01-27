@@ -183,6 +183,10 @@ func Open(config *Config) (*Starskey, error) {
 
 	}
 
+	if config.Permission == 0 {
+		config.Permission = 750 /* default permission */
+	}
+
 	// If compression is configured we check if option is valid
 	if config.Compression {
 		switch config.CompressionOption {
@@ -197,19 +201,20 @@ func Open(config *Config) (*Starskey, error) {
 		config.Directory += string(os.PathSeparator)
 	}
 
-	// We create or the configured directory
+	// We create the configured directory
+	// (will not create if it already exists)
 	if err := os.MkdirAll(config.Directory, config.Permission); err != nil {
 		return nil, err
 	}
 
 	// We check if logging is configured,
-	// if so we log to file instead of standard output
+	// If so we log to file instead of standard output
 	if skey.config.Logging {
-		logFile, err := os.OpenFile(fmt.Sprintf("%s%s", skey.config.Directory, LogExtension), os.O_CREATE|os.O_APPEND|os.O_WRONLY, os.ModePerm)
+		logFile, err := os.OpenFile(fmt.Sprintf("%s%s", skey.config.Directory, LogExtension), os.O_CREATE|os.O_APPEND|os.O_WRONLY, config.Permission)
 		if err != nil {
 			return nil, err
 		}
-		log.SetOutput(logFile)
+		log.SetOutput(logFile) // We set the log output to the file
 		skey.logFile = logFile
 	}
 
@@ -853,7 +858,7 @@ func openLevels(config *Config) ([]*Level, error) {
 		}
 
 		// Open the SSTables
-		sstables, err := openSSTables(fmt.Sprintf("%s%s%d", config.Directory, LevelPrefix, i+1), config.BloomFilter)
+		sstables, err := openSSTables(fmt.Sprintf("%s%s%d", config.Directory, LevelPrefix, i+1), config.BloomFilter, config.Permission)
 		if err != nil {
 			return nil, err
 		}
@@ -870,7 +875,7 @@ func openLevels(config *Config) ([]*Level, error) {
 }
 
 // openSSTables opens SSTables in a directory and returns a slice of SSTable
-func openSSTables(directory string, bf bool) ([]*SSTable, error) {
+func openSSTables(directory string, bf bool, perm os.FileMode) ([]*SSTable, error) {
 	log.Println("Opening SSTables for level", directory)
 	sstables := make([]*SSTable, 0)
 
@@ -880,7 +885,7 @@ func openSSTables(directory string, bf bool) ([]*SSTable, error) {
 	}
 
 	// We create or the configured directory
-	if err := os.MkdirAll(directory, os.ModePerm); err != nil {
+	if err := os.MkdirAll(directory, perm); err != nil {
 		return nil, err
 	}
 
@@ -903,7 +908,7 @@ func openSSTables(directory string, bf bool) ([]*SSTable, error) {
 				// Open the key log
 				klogPath := fmt.Sprintf("%s%s", directory, file.Name())
 				log.Println("Opening SSTable klog", klogPath)
-				klog, err := pager.Open(klogPath, os.O_CREATE|os.O_RDWR, os.ModePerm, PageSize, true, SyncInterval)
+				klog, err := pager.Open(klogPath, os.O_CREATE|os.O_RDWR, perm, PageSize, true, SyncInterval)
 				if err != nil {
 					return nil, err
 				}
@@ -911,7 +916,7 @@ func openSSTables(directory string, bf bool) ([]*SSTable, error) {
 				// Open the value log for the key log
 				vlogPath := strings.TrimRight(klogPath, KLogExtension) + VLogExtension
 				log.Println("Opening SSTable vlog", vlogPath)
-				vlog, err := pager.Open(vlogPath, os.O_CREATE|os.O_RDWR, os.ModePerm, PageSize, true, SyncInterval)
+				vlog, err := pager.Open(vlogPath, os.O_CREATE|os.O_RDWR, perm, PageSize, true, SyncInterval)
 				if err != nil {
 					return nil, err
 				}
@@ -1502,7 +1507,7 @@ func (sst *SSTable) createBloomFilter(skey *Starskey) error {
 	}
 
 	// Open the bloom filter file
-	bfFile, err := os.OpenFile(fmt.Sprintf("%s%s", strings.TrimSuffix(sst.klog.Name(), KLogExtension), BloomFilterExtension), os.O_CREATE|os.O_RDWR, os.ModePerm)
+	bfFile, err := os.OpenFile(fmt.Sprintf("%s%s", strings.TrimSuffix(sst.klog.Name(), KLogExtension), BloomFilterExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission)
 	if err != nil {
 		return err
 	}
