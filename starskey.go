@@ -823,6 +823,9 @@ func (txn *Txn) Rollback() error {
 					return err
 				}
 
+				// Escalate write
+				txn.db.wal.EscalateFSync()
+
 				// Put the key-value pair into the memtable
 				err = txn.db.memtable.Put(op.rollback.key, op.rollback.value)
 				if err != nil {
