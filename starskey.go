@@ -184,7 +184,7 @@ func Open(config *Config) (*Starskey, error) {
 	}
 
 	if config.Permission == 0 {
-		config.Permission = 750 /* default permission */
+		config.Permission = 750 // Default permission
 	}
 
 	// If compression is configured we check if option is valid
