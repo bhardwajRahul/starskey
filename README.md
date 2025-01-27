@@ -146,7 +146,7 @@ Once flushed to disk it will live in an sstable at l1 until it is compacted.  On
 If a key is deleted it will live on the same way until it reaches last level at which point it will be removed entirely.
 
 ## Memory and disk sorting
-Sorting would be lexicographical (alphabetical), meaning it will sort based on the byte-by-byte comparisons of slices.
+The sorting internally would be lexicographical (alphabetical), meaning it will sort based on the byte-by-byte comparisons of slices.
 We use bytes.Compare to sort keys in memory and on disk.
 
 
