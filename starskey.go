@@ -1224,6 +1224,12 @@ func (skey *Starskey) compact(level int) error {
 
 	// Select subset of tables for partial compaction
 	numTablesToCompact := len(skey.levels[level].sstables) / 2
+
+	// In case number of sstables is less than 2
+	if numTablesToCompact < 2 {
+		numTablesToCompact = 2 // Like this we ensure we merge at least 2 sst's
+	}
+
 	tablesToCompact := skey.levels[level].sstables[:numTablesToCompact]
 
 	// Merge selected tables
