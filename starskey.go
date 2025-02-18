@@ -25,6 +25,7 @@ import (
 	"github.com/klauspost/compress/snappy"
 	"github.com/starskey-io/starskey/bloomfilter"
 	"github.com/starskey-io/starskey/pager"
+	"github.com/starskey-io/starskey/surf"
 	"github.com/starskey-io/starskey/ttree"
 	"go.mongodb.org/mongo-driver/bson" // It's fast and simple for our use case
 	"log"
@@ -41,6 +42,7 @@ var (
 	KLogExtension          = ".klog"                        // key log extension
 	LogExtension           = ".log"                         // debug log extension
 	BloomFilterExtension   = ".bf"                          // bloom filter extension
+	SuRFExtension          = ".srf"                         // SuRF extension
 	SSTPrefix              = "sst_"                         // SSTable prefix
 	LevelPrefix            = "l"                            // Level prefix
 	PageSize               = 128                            // Page size, smaller is better.  The pager handles overflowing in sequence. 1024, or 1024 will cause VERY large files.
@@ -62,6 +64,7 @@ type Config struct {
 	Logging           bool              // Enable log file
 	Compression       bool              // Enable compression
 	CompressionOption CompressionOption // Desired compression option
+	SuRF              bool              // Enable SuRF
 }
 
 // Level represents a disk level
@@ -107,6 +110,7 @@ type SSTable struct {
 	klog        *pager.Pager             // Key log, stores KLogRecord records
 	vlog        *pager.Pager             // Value log, stores VLogRecord records
 	bloomfilter *bloomfilter.BloomFilter // In-memory bloom filter for the SSTable, can be nil if not configured
+	surf        *surf.SuRF               // In-memory SuRF filter for the SSTable, can be nil if not configured
 }
 
 // KLogRecord represents a key log record
@@ -201,6 +205,12 @@ func Open(config *Config) (*Starskey, error) {
 		config.Directory += string(os.PathSeparator)
 	}
 
+	// You can't configure a bloom filter and SuRF at the same time
+	if config.BloomFilter && config.SuRF {
+		return nil, errors.New("cannot configure both bloom filter and SuRF")
+
+	}
+
 	// We create the configured directory
 	// (will not create if it already exists)
 	if err := os.MkdirAll(config.Directory, config.Permission); err != nil {
@@ -225,6 +235,9 @@ func Open(config *Config) (*Starskey, error) {
 	log.Println("MaxLevel:       ", config.MaxLevel)
 	log.Println("SizeFactor:     ", config.SizeFactor)
 	log.Println("BloomFilter:    ", config.BloomFilter)
+	log.Println("SuRF:           ", config.SuRF)
+	log.Println("Compression:    ", config.Compression)
+	log.Println("CompressionOpt: ", config.CompressionOption)
 	log.Println("Logging:        ", config.Logging)
 
 	log.Println("Opening write ahead log")
@@ -362,6 +375,12 @@ func (skey *Starskey) Put(key, value []byte) error {
 		return err
 	}
 
+	// If we are writing a tombstone we need to check each sstable and delete from surf and bloom filter
+	err = skey.handleTombstones(key, value)
+	if err != nil {
+		return err
+	}
+
 	// If the memtable size exceeds the flush threshold we trigger a sorted run to level 1
 	if skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
 		// Sorted run to level 1
@@ -369,6 +388,106 @@ func (skey *Starskey) Put(key, value []byte) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// handleTombstones handles tombstones
+func (skey *Starskey) handleTombstones(key, value []byte) error {
+	if bytes.Equal(value, Tombstone) {
+		for _, level := range skey.levels {
+			for _, sstable := range level.sstables {
+				klog := sstable.klog
+				vlog := sstable.vlog
+
+				// Create a new iterator for the key log
+				it := pager.NewIterator(klog)
+
+				// If bloom filter is configured we check if key is in the bloom filter
+				if skey.config.BloomFilter {
+					// We check in-memory bloom filter first
+					if !sstable.bloomfilter.Contains(key) {
+						continue
+					}
+				}
+
+				// If SuRF is configured we check if the key is in the SuRF filter
+				if skey.config.SuRF {
+					// We check in-memory SuRF filter first
+					if !sstable.surf.Contains(key) {
+						continue
+					}
+				}
+
+				for it.Next() {
+					data, err := it.Read()
+					if err != nil {
+						break
+					}
+					klogRecord, err := deserializeKLogRecord(data, skey.config.Compression, skey.config.CompressionOption)
+					if err != nil {
+						return err
+					}
+
+					if bytes.Equal(klogRecord.Key, key) {
+						// We found the key
+						// We read the value from the value log
+						read, _, err := vlog.Read(int(klogRecord.ValPageNum))
+						if err != nil {
+							return err
+						}
+						vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
+						if err != nil {
+							return err
+						}
+
+						// Check if the value is a tombstone
+						if bytes.Equal(vlogRecord.Value, Tombstone) {
+							continue
+						}
+
+						// Delete from bloom filter
+						if skey.config.BloomFilter {
+							// Bloom filter we must recreate the bloom filter
+							err = sstable.createBloomFilter(skey)
+							if err != nil {
+								return err
+							}
+
+						}
+
+						// Delete from SuRF
+						if skey.config.SuRF {
+							sstable.surf.Delete(key)
+							// We update the surf file
+							surfFile, err := os.OpenFile(fmt.Sprintf("%s%s", strings.TrimSuffix(sstable.klog.Name(), KLogExtension), SuRFExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission)
+							if err != nil {
+								return err
+							}
+
+							// We truncate
+							err = surfFile.Truncate(0)
+							if err != nil {
+								return err
+							}
+
+							// We serialize the surf
+							serializedSurf, err := sstable.surf.Serialize()
+							if err != nil {
+								return err
+							}
+
+							// We write the surf to the file
+							_, err = surfFile.WriteAt(serializedSurf, 0)
+							if err != nil {
+								return err
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -409,6 +528,14 @@ func (skey *Starskey) Get(key []byte) ([]byte, error) {
 			if skey.config.BloomFilter {
 				// We check in-memory bloom filter first
 				if !sstable.bloomfilter.Contains(key) {
+					continue
+				}
+			}
+
+			// If SuRF is configured we check if the key is in the SuRF filter
+			if skey.config.SuRF {
+				// We check in-memory SuRF filter first
+				if !sstable.surf.Contains(key) {
 					continue
 				}
 			}
@@ -492,6 +619,14 @@ func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
 		for _, sstable := range level.sstables {
 			klog := sstable.klog
 			vlog := sstable.vlog
+
+			// If the surf is configured we check if the range is in the SuRF filter
+			if skey.config.SuRF {
+				// We check in-memory SuRF filter first
+				if !sstable.surf.CheckRange(startKey, endKey) {
+					continue
+				}
+			}
 
 			it := pager.NewIterator(klog)
 
@@ -858,7 +993,7 @@ func openLevels(config *Config) ([]*Level, error) {
 		}
 
 		// Open the SSTables
-		sstables, err := openSSTables(fmt.Sprintf("%s%s%d", config.Directory, LevelPrefix, i+1), config.BloomFilter, config.Permission)
+		sstables, err := openSSTables(fmt.Sprintf("%s%s%d", config.Directory, LevelPrefix, i+1), config.BloomFilter, config.Permission, config.SuRF)
 		if err != nil {
 			return nil, err
 		}
@@ -875,7 +1010,7 @@ func openLevels(config *Config) ([]*Level, error) {
 }
 
 // openSSTables opens SSTables in a directory and returns a slice of SSTable
-func openSSTables(directory string, bf bool, perm os.FileMode) ([]*SSTable, error) {
+func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SSTable, error) {
 	log.Println("Opening SSTables for level", directory)
 	sstables := make([]*SSTable, 0)
 
@@ -940,6 +1075,22 @@ func openSSTables(directory string, bf bool, perm os.FileMode) ([]*SSTable, erro
 
 					sst.bloomfilter = deserializedBf
 					log.Println("Bloom filter opened successfully for SSTable")
+				}
+
+				if srf {
+					log.Println("Opening SuRF filter for SSTable", strings.TrimRight(klogPath, KLogExtension)+SuRFExtension)
+					surfFile, err := os.ReadFile(strings.TrimRight(klogPath, KLogExtension) + SuRFExtension)
+					if err != nil {
+						return nil, err
+					}
+
+					deserializedSurf, err := surf.Deserialize(surfFile)
+					if err != nil {
+						return nil, err
+					}
+
+					sst.surf = deserializedSurf
+					log.Println("SuRF filter opened successfully for SSTable")
 				}
 
 				// Append the SSTable to the list
@@ -1021,6 +1172,66 @@ func (skey *Starskey) run() error {
 	}
 
 	var bloomFilterFile *os.File
+	var surfFile *os.File
+
+	if skey.config.SuRF {
+		surfFile, err = os.OpenFile(fmt.Sprintf("%sl1%s%s%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), SuRFExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission)
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			return err
+		}
+		// We get a count of entries in the memtable
+		mtCount := uint(skey.memtable.CountEntries())
+
+		log.Printf("Creating SuRF for run with %d entries\n", mtCount)
+
+		srf := surf.NewSuRF(int(mtCount))
+
+		iter := skey.memtable.NewIterator(false)
+		for iter.Valid() {
+			if entry, ok := iter.Current(); ok {
+				srf.Add(entry.Key)
+			}
+
+			if !iter.HasNext() {
+				break
+			}
+
+			iter.Next()
+
+		}
+
+		serializedSuRF, err := srf.Serialize()
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			_ = surfFile.Close()
+			_ = os.Remove(surfFile.Name())
+			return err
+		}
+
+		_, err = surfFile.Write(serializedSuRF)
+		if err != nil {
+			_ = klog.Close()
+			_ = vlog.Close()
+			_ = os.Remove(klog.Name())
+			_ = os.Remove(vlog.Name())
+			_ = surfFile.Close()
+			_ = os.Remove(surfFile.Name())
+			return err
+		}
+		_ = surfFile.Close()
+
+		sstable.surf = srf
+
+		log.Println("SuRF created for sstable")
+
+	}
 
 	// If bloom is enabled we create bloom filter and write it to page 0 on klog
 	if skey.config.BloomFilter {
@@ -1209,6 +1420,14 @@ func (skey *Starskey) compact(level int) error {
 					return err
 				}
 			}
+
+			if skey.config.SuRF {
+				// Create a new SuRF filter for the merged table
+				if err := mergedTable.createSuRF(skey); err != nil {
+					return err
+				}
+			}
+
 			// Replace the SSTables in the last level with the merged table
 			skey.levels[level].sstables = []*SSTable{mergedTable}
 			log.Println("Compaction of last level completed successfully")
@@ -1240,6 +1459,14 @@ func (skey *Starskey) compact(level int) error {
 		if err := mergedTable.createBloomFilter(skey); err != nil {
 			return err
 		}
+	}
+
+	if skey.config.SuRF {
+		// Create a new SuRF filter for the merged table
+		if err := mergedTable.createSuRF(skey); err != nil {
+			return err
+		}
+
 	}
 
 	// Move merged table to next level
@@ -1383,8 +1610,8 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 		}
 
 		if bytes.Equal(vlogRecord.Value, Tombstone) {
-			// Skip tombstones only if not at the last level
-			if level < int(skey.config.MaxLevel)-1 {
+			// Skip tombstones only if at the last level
+			if level == int(skey.config.MaxLevel)-1 {
 				iterators[smallestIdx].hasMore = iterators[smallestIdx].iterator.Next()
 				if iterators[smallestIdx].hasMore {
 					deserializedKLogRecord, err := deserializeKLogRecord(iterators[smallestIdx].iterator.CurrentData, skey.config.Compression, skey.config.CompressionOption)
@@ -1512,6 +1739,9 @@ func (sst *SSTable) createBloomFilter(skey *Starskey) error {
 		return err
 	}
 
+	// Remove previous bloom filter file
+	_ = os.Remove(fmt.Sprintf("%s%s", strings.TrimSuffix(sst.klog.Name(), KLogExtension), BloomFilterExtension))
+
 	// Open the bloom filter file
 	bfFile, err := os.OpenFile(fmt.Sprintf("%s%s", strings.TrimSuffix(sst.klog.Name(), KLogExtension), BloomFilterExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission)
 	if err != nil {
@@ -1530,8 +1760,19 @@ func (sst *SSTable) createBloomFilter(skey *Starskey) error {
 			return err
 		}
 
+		vlog, _, err := sst.vlog.Read(int(klogRecord.ValPageNum))
+		if err != nil {
+			return err
+		}
+
+		// Check if the value is a tombstone
+		if bytes.Equal(vlog, Tombstone) {
+			continue
+		}
+
 		// We add the key to the bloom filter
 		sst.bloomfilter.Add(klogRecord.Key)
+
 	}
 
 	// We serialize the bloom filter
@@ -1545,6 +1786,67 @@ func (sst *SSTable) createBloomFilter(skey *Starskey) error {
 	if err != nil {
 		return err
 	}
+
+	return nil
+}
+
+// createSuRF creates a SuRF filter for the SSTable
+func (sst *SSTable) createSuRF(skey *Starskey) error {
+	// Create a new SuRF with size based on the number of pages in key log
+	surf := surf.NewSuRF(sst.klog.PageCount() * 2)
+	if surf == nil {
+		return errors.New("failed to create SuRF filter")
+	}
+
+	// Open the SuRF filter file
+	surfFile, err := os.OpenFile(fmt.Sprintf("%s%s",
+		strings.TrimSuffix(sst.klog.Name(), KLogExtension),
+		SuRFExtension),
+		os.O_CREATE|os.O_RDWR,
+		skey.config.Permission)
+	if err != nil {
+		return fmt.Errorf("failed to open SuRF file: %v", err)
+	}
+	defer surfFile.Close()
+
+	// Create an iterator for the key log
+	iter := pager.NewIterator(sst.klog)
+	for iter.Next() {
+		data, err := iter.Read()
+		if err != nil {
+			return fmt.Errorf("failed to read from key log: %v", err)
+		}
+
+		// Deserialize the key log record
+		klogRecord, err := deserializeKLogRecord(data,
+			skey.config.Compression,
+			skey.config.CompressionOption)
+		if err != nil {
+			return fmt.Errorf("failed to deserialize key log record: %v", err)
+		}
+
+		// Add the key to the SuRF filter
+		surf.Add(klogRecord.Key)
+
+	}
+
+	// Serialize the SuRF filter
+	serializedSurf, err := surf.Serialize()
+	if err != nil {
+		return fmt.Errorf("failed to serialize SuRF: %v", err)
+	}
+
+	// Write the serialized SuRF filter to the file
+	_, err = surfFile.Write(serializedSurf)
+	if err != nil {
+		return fmt.Errorf("failed to write serialized SuRF: %v", err)
+	}
+
+	// Set the SuRF filter for the SSTable
+	sst.surf = surf
+
+	log.Println("SuRF filter created successfully for SSTable:",
+		strings.TrimSuffix(sst.klog.Name(), KLogExtension))
 
 	return nil
 }
@@ -1736,4 +2038,239 @@ func deserializeVLogRecord(data []byte, decompress bool, option CompressionOptio
 	}
 	return &record, nil
 
+}
+
+// DeleteByRange deletes all keys in the given range [startKey, endKey]
+// First fix the DeleteByRange method to properly handle SuRF updates
+func (skey *Starskey) DeleteByRange(startKey, endKey []byte) error {
+	if len(startKey) == 0 {
+		return errors.New("start key cannot be empty")
+	}
+	if len(endKey) == 0 {
+		return errors.New("end key cannot be empty")
+	}
+	if bytes.Compare(startKey, endKey) > 0 {
+		return errors.New("start key cannot be greater than end key")
+	}
+
+	skey.lock.Lock()
+	defer skey.lock.Unlock()
+
+	seenKeys := make(map[string]struct{})
+
+	// Check memtable first
+	entries := skey.memtable.Range(startKey, endKey)
+	for _, entry := range entries {
+		// Skip if already tombstoned
+		if bytes.Equal(entry.Value, Tombstone) {
+			continue
+		}
+		seenKeys[string(entry.Key)] = struct{}{}
+
+		err := skey.appendToWal(&WALRecord{
+			Key:   entry.Key,
+			Value: Tombstone,
+			Op:    Delete,
+		})
+		if err != nil {
+			return err
+		}
+
+		err = skey.memtable.Put(entry.Key, Tombstone)
+		if err != nil {
+			return err
+		}
+
+		// If we are writing a tombstone we need to check each sstable and delete from surf and bloom filter
+		err = skey.handleTombstones(entry.Key, Tombstone)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Process SSTables
+	for _, level := range skey.levels {
+		for _, sstable := range level.sstables {
+			if sstable == nil {
+				continue
+			}
+
+			if skey.config.SuRF && sstable.surf != nil {
+				if !sstable.surf.CheckRange(startKey, endKey) {
+					continue
+				}
+			}
+
+			it := pager.NewIterator(sstable.klog)
+
+			if skey.config.BloomFilter {
+				if !it.Next() {
+					continue
+				}
+			}
+
+			for it.Next() {
+				data, err := it.Read()
+				if err != nil {
+					return err
+				}
+
+				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression, skey.config.CompressionOption)
+				if err != nil {
+					return err
+				}
+
+				if bytes.Compare(klogRecord.Key, startKey) >= 0 && bytes.Compare(klogRecord.Key, endKey) <= 0 {
+					if _, seen := seenKeys[string(klogRecord.Key)]; seen {
+						continue
+					}
+
+					// Read current value to check if already tombstoned
+					read, _, err := sstable.vlog.Read(int(klogRecord.ValPageNum))
+					if err != nil {
+						return err
+					}
+
+					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
+					if err != nil {
+						return err
+					}
+
+					// Skip if already tombstoned
+					if bytes.Equal(vlogRecord.Value, Tombstone) {
+						continue
+					}
+
+					seenKeys[string(klogRecord.Key)] = struct{}{}
+
+					err = skey.appendToWal(&WALRecord{
+						Key:   klogRecord.Key,
+						Value: Tombstone,
+						Op:    Delete,
+					})
+					if err != nil {
+						return err
+					}
+
+					err = skey.memtable.Put(klogRecord.Key, Tombstone)
+					if err != nil {
+						return err
+					}
+
+					err = skey.handleTombstones(klogRecord.Key, Tombstone)
+					if err != nil {
+						return err
+					}
+
+				}
+			}
+		}
+	}
+
+	if skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
+		if err := skey.run(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// DeleteByFilter deletes all keys that match the given filter function
+func (skey *Starskey) DeleteByFilter(compare func(key []byte) bool) error {
+	// Validate filter function
+	if compare == nil {
+		return errors.New("filter function cannot be nil")
+	}
+
+	// Lock for thread safety
+	skey.lock.Lock()
+	defer skey.lock.Unlock()
+
+	// Delete matching keys from memtable first
+	iter := skey.memtable.NewIterator(false)
+	for iter.Valid() {
+		if entry, ok := iter.Current(); ok {
+			if compare(entry.Key) {
+				err := skey.appendToWal(&WALRecord{
+					Key:   entry.Key,
+					Value: Tombstone,
+					Op:    Delete,
+				})
+				if err != nil {
+					return err
+				}
+
+				err = skey.memtable.Put(entry.Key, Tombstone)
+				if err != nil {
+					return err
+				}
+
+				err = skey.handleTombstones(entry.Key, Tombstone)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		if !iter.HasNext() {
+			break
+		}
+		iter.Next()
+	}
+
+	// Search through levels for matching keys
+	for _, level := range skey.levels {
+		for _, sstable := range level.sstables {
+			if sstable == nil {
+				continue
+			}
+
+			// Create iterator for key log
+			it := pager.NewIterator(sstable.klog)
+			for it.Next() {
+				data, err := it.Read()
+				if err != nil {
+					return err
+				}
+
+				klogRecord, err := deserializeKLogRecord(data,
+					skey.config.Compression,
+					skey.config.CompressionOption)
+				if err != nil {
+					return err
+				}
+
+				// Check if key matches filter
+				if compare(klogRecord.Key) {
+					err = skey.appendToWal(&WALRecord{
+						Key:   klogRecord.Key,
+						Value: Tombstone,
+						Op:    Delete,
+					})
+					if err != nil {
+						return err
+					}
+
+					err = skey.memtable.Put(klogRecord.Key, Tombstone)
+					if err != nil {
+						return err
+					}
+
+					err = skey.handleTombstones(klogRecord.Key, Tombstone)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
+	// Check if memtable needs to be flushed
+	if skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
+		if err := skey.run(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
