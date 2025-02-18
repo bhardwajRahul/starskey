@@ -14,10 +14,12 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 - **WAL with recovery** Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
 - **Key value separation** Keys and values are stored separately for sstables within a klog and vlog respectively.
 - **Bloom filters** Each sstable has an in memory bloom filter to reduce disk reads.
+- **Succinct Range Filters** If enabled will speed up range queries. Will use more memory than bloom filters. Only a bloom filter OR a SuRF filter can be enabled.
 - **Fast** up to 400k+ ops per second.
 - **Compression** S2, and Snappy compression is available.
 - **Logging** Logging to file is available.  Will write to standard out if not enabled.
-- **Thread safe** Starskey is thread safe.  Multiple goroutines can read and write to Starskey concurrently.
+- **Thread safe** Starskey is thread safe.  Multiple goroutines can read and write to Starskey concurrently.  Starskey uses one global lock to keep things consistent.
+- **T-Tree memtable** the memory table is a balanced in-memory tree data structure, designed as an alternative to AVL trees and B-Trees for main-memory.
 
 ## Bench
 Use the benchmark program at [bench](https://github.com/starskey-io/bench) to compare Starskey with other popular key value stores/engines.
@@ -41,17 +43,18 @@ func main() {
         MaxLevel:          3,                      // Max levels number of disk levels
         SizeFactor:        10,                     // Size factor for each level.  Say 10 that's 10 * the FlushThreshold at each level. So level 1 is 10MB, level 2 is 100MB, level 3 is 1GB.
         BloomFilter:       false,                  // If you want to use bloom filters
+        SuRF:              false,                  // If enabled will speed up range queries as we check if an sstable has the keys we are looking for.
         Logging:           true,                   // Enable logging to file
         Compression:       false,                  // Enable compression
         CompressionOption: starskey.NoCompression, // Or SnappyCompression, S2Compression
         }) // Config cannot be nil**
     if err != nil {
-        log.Fatalf("Failed to open starskey: %v", err)
+        // ..handle error
     }
 
     // Close starskey
     if err := skey.Close(); err != nil {
-        log.Fatalf("Failed to close starskey: %v", err)
+        // ..handle error
     }
 
     key := []byte("some_key")
@@ -59,18 +62,18 @@ func main() {
 
     // Write key-value pair
     if err := skey.Put(key, value); err != nil {
-        log.Fatalf("Failed to put key-value pair: %v", err)
+        // ..handle error
     }
 
     // Read key-value pair
     v, err := skey.Get(key)
     if err != nil {
-        log.Fatalf("Failed to get key-value pair: %v", err)
+        // ..handle error
     }
 
     // Value is nil if key does not exist
     if v == nil {
-        log.Fatalf("Value is nil")
+        // ..handle error
     }
 
     log.Println(string(key), string(v))
@@ -83,7 +86,7 @@ You can range over a min and max key to retrieve values.
 ```go
 results, err := skey.Range([]byte("key900"), []byte("key980"))
 if err != nil {
-    log.Fatalf("Failed to range: %v", err)
+    // ..handle error
 }
 ```
 
@@ -97,7 +100,7 @@ compareFunc := func(key []byte) bool {
 
 results, err := skey.FilterKeys(compareFunc)
 if err != nil {
-    log.Fatalf("Failed to filter: %v", err)
+    // ..handle error
 }
 ```
 
@@ -107,14 +110,14 @@ Using atomic transactions to group multiple operations into a single atomic tran
 ```go
 txn := skey.BeginTxn()
 if txn == nil {
-    log.Fatalf("Failed to begin transaction")
+    // ..handle error
 }
 
 txn.Put([]byte("key"), []byte("value"))
 // or txn.Delete([]byte("key"))
 
 if err := txn.Commit(); err != nil {
-    log.Fatalf("Failed to commit transaction: %v", err)
+    // ..handle error
 }
 ```
 
@@ -127,7 +130,7 @@ err = skey.Update(func(txn *Txn) error {
     return nil
 })
 if err != nil {
-    log.Fatalf("Failed to update: %v", err)
+    // ..handle error
 }
 ```
 
@@ -135,7 +138,26 @@ if err != nil {
 Delete a key from starskey.
 ```go
 if err := skey.Delete([]byte("key")); err != nil {
-    log.Fatalf("Failed to delete key: %v", err)
+    // ..handle error
+}
+```
+
+### Delete by range
+```go
+if err := skey.DeleteByRange([]byte("startKey"), []byte("endKey")); err != nil {
+    // ..handle error
+}
+```
+
+### Delete by filter
+```go
+compareFunc := func(key []byte) bool {
+    // if has prefix "c" return true
+    return bytes.HasPrefix(key, []byte("c"))
+}
+
+if err := skey.DeleteByFilter(compareFunc); err != nil {
+    // ..handle error
 }
 ```
 

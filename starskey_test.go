@@ -922,6 +922,71 @@ func TestStarskey_FilterKeys_Invalid(t *testing.T) {
 
 }
 
+func TestStarskey_DeleteByRange_Sequential(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Insert sequential data like in Range test
+	for i := 0; i < 1000; i++ {
+		key := []byte(fmt.Sprintf("key%03d", i))
+		value := []byte(fmt.Sprintf("value%03d", i))
+
+		if err := starskey.Put(key, value); err != nil {
+			t.Fatalf("Failed to put key-value pair: %v", err)
+		}
+	}
+
+	// Delete a range
+	startKey := []byte("key200")
+	endKey := []byte("key299")
+
+	if err := starskey.DeleteByRange(startKey, endKey); err != nil {
+		t.Fatalf("Failed to delete range: %v", err)
+	}
+
+	// Verify deletion
+	for i := 0; i < 1000; i++ {
+		key := []byte(fmt.Sprintf("key%03d", i))
+		value, err := starskey.Get(key)
+		if err != nil {
+			t.Fatalf("Failed to get key: %v", err)
+		}
+
+		// Keys in deleted range should return nil
+		if i >= 200 && i <= 299 {
+			if value != nil {
+				t.Errorf("Key %s should be deleted but has value %s", key, value)
+			}
+		} else {
+			// Other keys should still have their values
+			expectedValue := []byte(fmt.Sprintf("value%03d", i))
+			if !bytes.Equal(value, expectedValue) {
+				t.Errorf("Key %s has wrong value. Got %s, want %s", key, value, expectedValue)
+			}
+		}
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
 func TestStarskey_Range(t *testing.T) {
 	_ = os.RemoveAll("test")
 	defer func() {
@@ -1120,6 +1185,194 @@ func TestStarskey_Delete(t *testing.T) {
 			t.Fatalf("Failed to delete key: %v", val)
 		}
 
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
+func TestStarskey_DeleteByRange_SuRF(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 1024,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+		SuRF:           true,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Insert test data in different ranges
+	ranges := []struct {
+		prefix string
+		start  int
+		end    int
+	}{
+		{"aaa", 0, 100},
+		{"bbb", 100, 200},
+		{"ccc", 200, 300},
+	}
+
+	// Track inserted keys for verification
+	insertedKeys := make(map[string]bool)
+
+	// Insert data and force flush after each range to ensure separate SSTables
+	for _, r := range ranges {
+		for i := r.start; i < r.end; i++ {
+			key := []byte(fmt.Sprintf("%s%03d", r.prefix, i))
+			value := []byte(fmt.Sprintf("value%03d", i))
+
+			if err := starskey.Put(key, value); err != nil {
+				t.Fatalf("Failed to put key-value pair: %v", err)
+			}
+			insertedKeys[string(key)] = true
+		}
+		// Force flush after each range
+		if err := starskey.run(); err != nil {
+			t.Fatalf("Failed to force flush: %v", err)
+		}
+	}
+
+	// Test range deletion spanning multiple SSTables
+	startKey := []byte("bbb150")
+	endKey := []byte("ccc250")
+
+	// Delete range
+	if err := starskey.DeleteByRange(startKey, endKey); err != nil {
+		t.Fatalf("Failed to delete range: %v", err)
+	}
+
+	// Test partial range within single SSTable
+	startKey = []byte("aaa030")
+	endKey = []byte("aaa060")
+
+	if err := starskey.DeleteByRange(startKey, endKey); err != nil {
+		t.Fatalf("Failed to delete range: %v", err)
+	}
+
+	// Verify final state with actual gets
+	t.Log("Verifying deletions...")
+	for key := range insertedKeys {
+		inFirstRange := bytes.Compare([]byte(key), []byte("aaa030")) >= 0 &&
+			bytes.Compare([]byte(key), []byte("aaa060")) <= 0
+		inSecondRange := bytes.Compare([]byte(key), []byte("bbb150")) >= 0 &&
+			bytes.Compare([]byte(key), []byte("ccc250")) <= 0
+		shouldExist := !inFirstRange && !inSecondRange
+
+		val, err := starskey.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("Failed to get key-value pair: %v", err)
+		}
+
+		if shouldExist && val == nil {
+			t.Errorf("Key %s should exist but doesn't", key)
+		}
+		if !shouldExist && val != nil {
+			t.Errorf("Key %s should be deleted but exists with value %s", key, val)
+		}
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
+func TestStarskey_DeleteByFilter(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+		SuRF:           false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Insert test data with different key prefixes
+	for i := 0; i < 1000; i++ {
+		// Create keys with different prefixes to test filter deletion
+		var key []byte
+		if i < 300 {
+			key = []byte(fmt.Sprintf("test1_%03d", i)) // test1_000 - test1_299
+		} else if i < 600 {
+			key = []byte(fmt.Sprintf("test2_%03d", i)) // test2_300 - test2_599
+		} else {
+			key = []byte(fmt.Sprintf("other_%03d", i)) // other_600 - other_999
+		}
+		value := []byte(fmt.Sprintf("value%03d", i))
+
+		if err := starskey.Put(key, value); err != nil {
+			t.Fatalf("Failed to put key-value pair: %v", err)
+		}
+	}
+
+	// Create filter function to delete all keys with "test" prefix
+	filterFunc := func(key []byte) bool {
+		return bytes.HasPrefix(key, []byte("test"))
+	}
+
+	// Delete all keys matching the filter
+	if err := starskey.DeleteByFilter(filterFunc); err != nil {
+		t.Fatalf("Failed to delete by filter: %v", err)
+	}
+
+	// Verify all "test" prefixed keys are deleted
+	for i := 0; i < 600; i++ {
+		var key []byte
+		if i < 300 {
+			key = []byte(fmt.Sprintf("test1_%03d", i))
+		} else {
+			key = []byte(fmt.Sprintf("test2_%03d", i))
+		}
+
+		val, err := starskey.Get(key)
+		if err != nil {
+			t.Fatalf("Failed to get key-value pair: %v", err)
+		}
+		if val != nil {
+			t.Fatalf("Key %s should have been deleted", key)
+		}
+	}
+
+	// Verify other keys are still present
+	for i := 600; i < 1000; i++ {
+		key := []byte(fmt.Sprintf("other_%03d", i))
+		value := []byte(fmt.Sprintf("value%03d", i))
+
+		val, err := starskey.Get(key)
+		if err != nil {
+			t.Fatalf("Failed to get key-value pair: %v", err)
+		}
+		if !reflect.DeepEqual(val, value) {
+			t.Fatalf("Value does not match expected value for key %s", key)
+		}
+	}
+
+	// Test invalid filter function
+	err = starskey.DeleteByFilter(nil)
+	if err == nil {
+		t.Fatal("DeleteByFilter should return error when filter function is nil")
 	}
 
 	if err := starskey.Close(); err != nil {
