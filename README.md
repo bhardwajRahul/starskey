@@ -9,7 +9,7 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 ## Features
 - **Levelled partial merge compaction**  Compactions occur on writes, if any disk level reaches it's max size half of the sstables are merged into a new sstable and placed into the next level.  This algorithm is recursive until last level.  At last level if full we merge all sstables into a new sstable.  During merge operations tombstones(deleted keys) are removed.
 - **Simple API** with Put, Get, Delete, Range, FilterKeys, Update (for txns)
-- **Acid transactions** You can group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed transactions roll back.
+- **Acid transactions** You can group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed operations within a transaction roll back.  These transactions would be considered fully serializable.
 - **Configurable options** You can configure many options such as max levels, memtable threshold, bloom filter, logging, compression and more.
 - **WAL with recovery** Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
 - **Key value separation** Keys and values are stored separately for sstables within a klog and vlog respectively.
@@ -76,7 +76,7 @@ func main() {
         // ..handle error
     }
 
-    log.Println(string(key), string(v))
+    fmt.Println(string(key), string(v))
 }
 
 ```
@@ -87,6 +87,11 @@ You can range over a min and max key to retrieve values.
 results, err := skey.Range([]byte("key900"), []byte("key980"))
 if err != nil {
     // ..handle error
+}
+
+// results is [][]byte where each element is a value
+for _, value := range results {
+    fmt.Println(string(value))  // Each result is just the value
 }
 ```
 
