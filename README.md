@@ -97,7 +97,7 @@ func main() {
 ```
 
 ## Range Keys
-You can provide a start and end key to retrieve a range of keys.
+You can provide a start and end key to retrieve a range of keys values.
 ```go
 results, err := skey.Range([]byte("key900"), []byte("key980"))
 if err != nil {
@@ -137,7 +137,7 @@ if err != nil {
 ```
 
 ### Prefix Search
-You can search for a prefix of a key.
+You can search for keys value's with a common prefix.
 ```go
 results, err := skey.PrefixSearch([]byte("ke"))
 if err != nil {
@@ -175,7 +175,7 @@ if err != nil {
 ```
 
 ## Delete
-Delete a key from starskey.
+Delete a key value pair from starskey.
 ```go
 if err := skey.Delete([]byte("key")); err != nil {
     // ..handle error
@@ -185,6 +185,7 @@ if err := skey.Delete([]byte("key")); err != nil {
 **Delete operations removing multiple key values return an `n` value which is the amount of keys deleted.**
 
 ### Delete by range
+Delete key values within a range.
 ```go
 if n, err := skey.DeleteByRange([]byte("startKey"), []byte("endKey")); err != nil {
     // ..handle error
@@ -193,6 +194,7 @@ if n, err := skey.DeleteByRange([]byte("startKey"), []byte("endKey")); err != ni
 ```
 
 ### Delete by filter
+Delete key values based on a filter/compare method.  You're comparing a key with a function and if it returns true the key is deleted.
 ```go
 compareFunc := func(key []byte) bool {
     // if has prefix "c" return true
@@ -206,6 +208,7 @@ if n, err := skey.DeleteByFilter(compareFunc); err != nil {
 ```
 
 ### Delete by key prefix
+Delete key values with a common prefix.
 ```go
 if n, err := skey.DeleteByPrefix([]byte("key")); err != nil {
     // ..handle error
