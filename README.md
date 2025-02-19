@@ -23,7 +23,7 @@ Starskey is optimized for write and read efficiency.
 - **T-Tree memtable** the memory table is a balanced in-memory tree data structure, designed as an alternative to AVL trees and B-Trees for main-memory.
 
 ## Discord
-Chat everything Starskey [Server](https://discord.gg/HVxkhyys3R)
+Chat everything Starskey @ our [Discord Server](https://discord.gg/HVxkhyys3R)
 
 ## Bench
 Use the benchmark program at [bench](https://github.com/starskey-io/bench) to compare Starskey with other popular key value stores/engines.
@@ -128,9 +128,9 @@ if err != nil {
 Starskey supports optimized prefix searches.
 
 ### Longest Prefix Search
-You can search for the longest prefix of a key.
+You can search for longest key with a common prefix.
 ```go
-result, n, err := skey.LongestPrefixSearch([]byte("key"))
+result, n, err := skey.LongestPrefixSearch([]byte("common_prefix"))
 if err != nil {
     // ..handle error
 }
@@ -181,6 +181,8 @@ if err := skey.Delete([]byte("key")); err != nil {
     // ..handle error
 }
 ```
+
+**Delete operations removing multiple key values return an `n` value which is the amount of keys deleted.**
 
 ### Delete by range
 ```go
