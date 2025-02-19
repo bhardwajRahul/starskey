@@ -480,14 +480,6 @@ func (t *TTree) Get(key []byte) (*Entry, bool) {
 	return nil, false
 }
 
-// max returns the maximum of two integers.
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 // Range retrieves all entries within the specified range.
 func (t *TTree) Range(start, end []byte) []*Entry {
 	var result []*Entry

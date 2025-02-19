@@ -313,6 +313,53 @@ func TestOpen(t *testing.T) {
 	}
 }
 
+func TestOpenOptionalInternalConfig(t *testing.T) {
+	os.RemoveAll("test")
+	defer os.RemoveAll("test")
+
+	// Define a valid configuration
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 1024 * 1024,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+		Optional: &OptionalConfig{
+			BackgroundFSync:         false,
+			BackgroundFSyncInterval: 0,
+			TTreeMin:                32,
+			TTreeMax:                64,
+			PageSize:                1024,
+			BloomFilterProbability:  0.25,
+		},
+	}
+
+	// Test opening starskey with a valid configuration
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// We verify the db directory is created with configured levels within
+	for i := uint64(0); i < config.MaxLevel; i++ {
+		if _, err := os.Stat(fmt.Sprintf("%s%sl%d", config.Directory, string(os.PathSeparator), i+1)); os.IsNotExist(err) {
+			t.Fatalf("Failed to create directory for level %d", i)
+		}
+
+	}
+
+	// Check if WAL exists
+	if _, err := os.Stat(fmt.Sprintf("%s%s%s", config.Directory, string(os.PathSeparator), WALExtension)); os.IsNotExist(err) {
+		t.Fatalf("Failed to create WAL file")
+	}
+
+	// Close starskey
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
 func TestOpenInvalid(t *testing.T) {
 	os.RemoveAll("test")
 	defer os.RemoveAll("test")
@@ -957,7 +1004,7 @@ func TestStarskey_DeleteByRange_Sequential(t *testing.T) {
 	startKey := []byte("key200")
 	endKey := []byte("key299")
 
-	if err := starskey.DeleteByRange(startKey, endKey); err != nil {
+	if _, err := starskey.DeleteByRange(startKey, endKey); err != nil {
 		t.Fatalf("Failed to delete range: %v", err)
 	}
 
@@ -1250,7 +1297,7 @@ func TestStarskey_DeleteByRange_SuRF(t *testing.T) {
 	endKey := []byte("ccc250")
 
 	// Delete range
-	if err := starskey.DeleteByRange(startKey, endKey); err != nil {
+	if _, err := starskey.DeleteByRange(startKey, endKey); err != nil {
 		t.Fatalf("Failed to delete range: %v", err)
 	}
 
@@ -1258,7 +1305,7 @@ func TestStarskey_DeleteByRange_SuRF(t *testing.T) {
 	startKey = []byte("aaa030")
 	endKey = []byte("aaa060")
 
-	if err := starskey.DeleteByRange(startKey, endKey); err != nil {
+	if _, err := starskey.DeleteByRange(startKey, endKey); err != nil {
 		t.Fatalf("Failed to delete range: %v", err)
 	}
 
@@ -1334,7 +1381,7 @@ func TestStarskey_DeleteByFilter(t *testing.T) {
 	}
 
 	// Delete all keys matching the filter
-	if err := starskey.DeleteByFilter(filterFunc); err != nil {
+	if _, err := starskey.DeleteByFilter(filterFunc); err != nil {
 		t.Fatalf("Failed to delete by filter: %v", err)
 	}
 
@@ -1371,7 +1418,7 @@ func TestStarskey_DeleteByFilter(t *testing.T) {
 	}
 
 	// Test invalid filter function
-	err = starskey.DeleteByFilter(nil)
+	_, err = starskey.DeleteByFilter(nil)
 	if err == nil {
 		t.Fatal("DeleteByFilter should return error when filter function is nil")
 	}

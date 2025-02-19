@@ -110,7 +110,6 @@ func (s *SuRF) checkRangeHelper(node *TrieNode, lower, upper []byte, depth int, 
 		suffix := MixedSuffixBits(lower, s.SuffixBits)
 		upperSuffix := MixedSuffixBits(upper, s.SuffixBits)
 
-		// Enhanced filtering using both suffix and hash
 		if node.Suffix >= suffix && node.Suffix <= upperSuffix {
 			nodeHash := ComputeNodeHash(path, path, s.HashBits)
 			if node.Hash == nodeHash {
@@ -183,7 +182,8 @@ func (s *SuRF) Delete(key []byte) bool {
 	return success
 }
 
-// deleteHelper returns two booleans: the first indicates if the key was successfully deleted,
+// deleteHelper returns two booleans, the first indicates if the key was successfully deleted
+// and the second indicates if the node should be deleted as well
 func (s *SuRF) deleteHelper(node *TrieNode, key []byte, depth int, parent *TrieNode) (bool, bool) {
 	if node == nil {
 		return false, false
