@@ -35,7 +35,7 @@ import (
 	"time"
 )
 
-// Global variables
+// Global system variables
 var (
 	WALExtension           = ".wal"                         // Write ahead log extension
 	VLogExtension          = ".vlog"                        // value log extension
@@ -1038,7 +1038,6 @@ func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SST
 		}
 
 		if strings.HasPrefix(file.Name(), SSTPrefix) {
-
 			if strings.HasSuffix(file.Name(), KLogExtension) {
 				// Open the key log
 				klogPath := fmt.Sprintf("%s%s", directory, file.Name())
@@ -1064,40 +1063,40 @@ func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SST
 				if bf {
 					log.Println("Opening bloom filter for SSTable", strings.TrimRight(klogPath, KLogExtension)+BloomFilterExtension)
 					bloomFilterFile, err := os.ReadFile(strings.TrimRight(klogPath, KLogExtension) + BloomFilterExtension)
-					if err != nil {
+					if err != nil && !os.IsNotExist(err) { // Allow file not exist error
 						return nil, err
 					}
-
-					deserializedBf, err := bloomfilter.Deserialize(bloomFilterFile)
-					if err != nil {
-						return nil, err
+					if err == nil {
+						deserializedBf, err := bloomfilter.Deserialize(bloomFilterFile)
+						if err != nil {
+							return nil, err
+						}
+						sst.bloomfilter = deserializedBf
+						log.Println("Bloom filter opened successfully for SSTable")
 					}
-
-					sst.bloomfilter = deserializedBf
-					log.Println("Bloom filter opened successfully for SSTable")
 				}
 
 				if srf {
-					log.Println("Opening SuRF filter for SSTable", strings.TrimRight(klogPath, KLogExtension)+SuRFExtension)
-					surfFile, err := os.ReadFile(strings.TrimRight(klogPath, KLogExtension) + SuRFExtension)
-					if err != nil {
+					surfPath := strings.TrimRight(klogPath, KLogExtension) + SuRFExtension
+					log.Println("Opening SuRF filter for SSTable", surfPath)
+					surfFile, err := os.ReadFile(surfPath)
+					if err != nil && !os.IsNotExist(err) { // Allow file not exist error
 						return nil, err
 					}
-
-					deserializedSurf, err := surf.Deserialize(surfFile)
-					if err != nil {
-						return nil, err
+					if err == nil {
+						deserializedSurf, err := surf.Deserialize(surfFile)
+						if err != nil {
+							return nil, err
+						}
+						sst.surf = deserializedSurf
+						log.Println("SuRF filter opened successfully for SSTable")
 					}
-
-					sst.surf = deserializedSurf
-					log.Println("SuRF filter opened successfully for SSTable")
 				}
 
 				// Append the SSTable to the list
 				sstables = append(sstables, sst)
 			}
 		}
-
 	}
 
 	return sstables, nil
@@ -2041,7 +2040,6 @@ func deserializeVLogRecord(data []byte, decompress bool, option CompressionOptio
 }
 
 // DeleteByRange deletes all keys in the given range [startKey, endKey]
-// First fix the DeleteByRange method to properly handle SuRF updates
 func (skey *Starskey) DeleteByRange(startKey, endKey []byte) error {
 	if len(startKey) == 0 {
 		return errors.New("start key cannot be empty")
@@ -2273,4 +2271,363 @@ func (skey *Starskey) DeleteByFilter(compare func(key []byte) bool) error {
 	}
 
 	return nil
+}
+
+// LongestPrefixSearch finds the longest matching prefix for a given key
+// Returns the value associated with the longest prefix and the length of the matched prefix
+func (skey *Starskey) LongestPrefixSearch(key []byte) ([]byte, int, error) {
+	// Validate input
+	if len(key) == 0 {
+		return nil, 0, errors.New("key cannot be empty")
+	}
+
+	// Lock for thread safety
+	skey.lock.Lock()
+	defer skey.lock.Unlock()
+
+	var bestMatch []byte
+	var bestMatchLength int = -1
+	seenKeys := make(map[string]struct{}) // Track seen keys like in Range method
+
+	// We check memtable first
+	entries := skey.memtable.Range([]byte{}, key) // Get all entries up to our search key
+	for _, entry := range entries {
+		// We skip if we've seen this key before
+		if _, seen := seenKeys[string(entry.Key)]; seen {
+			continue
+		}
+
+		// We check if this is a prefix match
+		if len(entry.Key) <= len(key) && bytes.HasPrefix(key, entry.Key) {
+			// If this is a longer match than what we've seen so far
+			if len(entry.Key) > bestMatchLength {
+				// Skip tombstones
+				if !bytes.Equal(entry.Value, Tombstone) {
+					bestMatch = entry.Value
+					bestMatchLength = len(entry.Key)
+					seenKeys[string(entry.Key)] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// Search through levels
+	for _, level := range skey.levels {
+		for _, sstable := range level.sstables {
+			if sstable == nil {
+				continue
+			}
+
+			klog := sstable.klog
+			vlog := sstable.vlog
+
+			// If SuRF is configured, use it to optimize the search
+			if skey.config.SuRF && sstable.surf != nil {
+				it := pager.NewIterator(klog)
+				prefix, length := sstable.surf.LongestPrefixSearch(key)
+				if length > 0 {
+					// If we haven't seen this key before
+					if _, seen := seenKeys[string(prefix)]; !seen {
+						// Check if this is a longer match
+						if length > bestMatchLength {
+							// Scan klog to find the matching key and its value
+							for it.Next() {
+								data, err := it.Read()
+								if err != nil {
+									return nil, 0, err
+								}
+
+								klogRecord, err := deserializeKLogRecord(data, skey.config.Compression, skey.config.CompressionOption)
+								if err != nil {
+									return nil, 0, err
+								}
+
+								if bytes.Equal(klogRecord.Key, prefix) {
+									read, _, err := vlog.Read(int(klogRecord.ValPageNum))
+									if err != nil {
+										return nil, 0, err
+									}
+
+									vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
+									if err != nil {
+										return nil, 0, err
+									}
+
+									// Only update if not a tombstone
+									if !bytes.Equal(vlogRecord.Value, Tombstone) {
+										bestMatch = vlogRecord.Value
+										bestMatchLength = length
+										seenKeys[string(prefix)] = struct{}{}
+									}
+									break
+								}
+							}
+						}
+					}
+				}
+				continue // Skip full scan for this sstable
+			}
+
+			it := pager.NewIterator(klog)
+
+			// Skip bloom filter page if configured
+			if skey.config.BloomFilter {
+				if !it.Next() {
+					continue
+				}
+			}
+
+			for it.Next() {
+				data, err := it.Read()
+				if err != nil {
+					return nil, 0, err
+				}
+
+				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression, skey.config.CompressionOption)
+				if err != nil {
+					return nil, 0, err
+				}
+
+				// Skip if we've seen this key before
+				if _, seen := seenKeys[string(klogRecord.Key)]; seen {
+					continue
+				}
+
+				// Check if this is a prefix match
+				if len(klogRecord.Key) <= len(key) && bytes.HasPrefix(key, klogRecord.Key) {
+					// If this is a longer match than what we've seen so far
+					if len(klogRecord.Key) > bestMatchLength {
+						read, _, err := vlog.Read(int(klogRecord.ValPageNum))
+						if err != nil {
+							return nil, 0, err
+						}
+
+						vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
+						if err != nil {
+							return nil, 0, err
+						}
+
+						// Skip tombstones
+						if !bytes.Equal(vlogRecord.Value, Tombstone) {
+							bestMatch = vlogRecord.Value
+							bestMatchLength = len(klogRecord.Key)
+							seenKeys[string(klogRecord.Key)] = struct{}{}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if bestMatchLength == -1 {
+		return nil, 0, nil // No match found
+	}
+
+	return bestMatch, bestMatchLength, nil
+}
+
+// DeleteByPrefix deletes all keys that match the given prefix and returns the number of keys deleted.
+func (skey *Starskey) DeleteByPrefix(prefix []byte) (int, error) {
+	if len(prefix) == 0 {
+		return 0, errors.New("prefix cannot be empty")
+	}
+
+	// Lock for thread safety
+	skey.lock.Lock()
+	defer skey.lock.Unlock()
+
+	deletedCount := 0
+
+	// We delete matching keys from memtable first
+	iter := skey.memtable.NewIterator(false)
+	for iter.Valid() {
+		if entry, ok := iter.Current(); ok {
+			if bytes.HasPrefix(entry.Key, prefix) {
+				err := skey.appendToWal(&WALRecord{
+					Key:   entry.Key,
+					Value: Tombstone,
+					Op:    Delete,
+				})
+				if err != nil {
+					return 0, err
+				}
+
+				err = skey.memtable.Put(entry.Key, Tombstone)
+				if err != nil {
+					return 0, err
+				}
+
+				err = skey.handleTombstones(entry.Key, Tombstone)
+				if err != nil {
+					return 0, err
+				}
+
+				deletedCount++
+			}
+		}
+		if !iter.HasNext() {
+			break
+		}
+		iter.Next()
+	}
+
+	// Search through levels for matching keys
+	for _, level := range skey.levels {
+		for _, sstable := range level.sstables {
+			if sstable == nil {
+				continue
+			}
+
+			if skey.config.SuRF && sstable.surf != nil {
+				if !sstable.surf.PrefixExists(prefix) {
+					continue
+				}
+			}
+
+			// Create iterator for key log
+			it := pager.NewIterator(sstable.klog)
+			for it.Next() {
+				data, err := it.Read()
+				if err != nil {
+					return 0, err
+				}
+
+				klogRecord, err := deserializeKLogRecord(data,
+					skey.config.Compression,
+					skey.config.CompressionOption)
+				if err != nil {
+					return 0, err
+				}
+
+				// Check if key matches prefix
+				if bytes.HasPrefix(klogRecord.Key, prefix) {
+					err = skey.appendToWal(&WALRecord{
+						Key:   klogRecord.Key,
+						Value: Tombstone,
+						Op:    Delete,
+					})
+					if err != nil {
+						return 0, err
+					}
+
+					err = skey.memtable.Put(klogRecord.Key, Tombstone)
+					if err != nil {
+						return 0, err
+					}
+
+					err = skey.handleTombstones(klogRecord.Key, Tombstone)
+					if err != nil {
+						return 0, err
+					}
+
+					deletedCount++
+				}
+			}
+		}
+	}
+
+	// Check if memtable needs to be flushed
+	if skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
+		if err := skey.run(); err != nil {
+			return 0, err
+		}
+	}
+
+	return deletedCount, nil
+}
+
+// PrefixSearch finds all keys that match the given prefix
+func (skey *Starskey) PrefixSearch(prefix []byte) ([][]byte, error) {
+	// Validate input
+	if len(prefix) == 0 {
+		return nil, errors.New("prefix cannot be empty")
+	}
+
+	// Lock for thread safety
+	skey.lock.Lock()
+	defer skey.lock.Unlock()
+
+	var result [][]byte
+	seenKeys := make(map[string]struct{})
+
+	// Check memtable first
+	entries := skey.memtable.Range(prefix, append(prefix, 0xFF))
+	for _, entry := range entries {
+		// Check if key has the prefix
+		if bytes.HasPrefix(entry.Key, prefix) {
+			// Skip if already seen or tombstoned
+			if _, seen := seenKeys[string(entry.Key)]; seen || bytes.Equal(entry.Value, Tombstone) {
+				continue
+			}
+			result = append(result, entry.Value)
+			seenKeys[string(entry.Key)] = struct{}{}
+		}
+	}
+
+	// Search through levels
+	for _, level := range skey.levels {
+		for _, sstable := range level.sstables {
+			if sstable == nil {
+				continue
+			}
+
+			// If SuRF is configured, check if prefix exists
+			if skey.config.SuRF && sstable.surf != nil {
+				if !sstable.surf.PrefixExists(prefix) {
+					continue
+				}
+			}
+
+			klog := sstable.klog
+			vlog := sstable.vlog
+
+			it := pager.NewIterator(klog)
+
+			if skey.config.BloomFilter {
+				if !it.Next() {
+					continue
+				}
+			}
+
+			for it.Next() {
+				data, err := it.Read()
+				if err != nil {
+					return nil, err
+				}
+
+				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression, skey.config.CompressionOption)
+				if err != nil {
+					return nil, err
+				}
+
+				// Skip if we've seen this key before
+				if _, seen := seenKeys[string(klogRecord.Key)]; seen {
+					continue
+				}
+
+				// Check if key has the prefix
+				if bytes.HasPrefix(klogRecord.Key, prefix) {
+					read, _, err := vlog.Read(int(klogRecord.ValPageNum))
+					if err != nil {
+						return nil, err
+					}
+
+					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
+					if err != nil {
+						return nil, err
+					}
+
+					// Skip tombstones
+					if bytes.Equal(vlogRecord.Value, Tombstone) {
+						continue
+					}
+
+					result = append(result, vlogRecord.Value)
+					seenKeys[string(klogRecord.Key)] = struct{}{}
+				}
+			}
+		}
+	}
+
+	return result, nil
 }

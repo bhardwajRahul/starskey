@@ -18,6 +18,7 @@
 package surf
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -363,6 +364,191 @@ func TestSuRF_Contains(t *testing.T) {
 			idx := rand.Intn(len(randomKeys))
 			if !surf.Contains(randomKeys[idx]) {
 				t.Errorf("Random key %s should exist but Contains returned false", randomKeys[idx])
+			}
+		}
+	})
+}
+
+func TestSuRF_PrefixSearch(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
+
+	// Initialize SuRF with an estimated number of keys
+	surf := NewSuRF(1000000)
+
+	// We test basic prefix matching
+	t.Run("Basic Prefix Matching", func(t *testing.T) {
+		// Add some test keys
+		testKeys := [][]byte{
+			[]byte("user123"),
+			[]byte("user456"),
+			[]byte("user789"),
+			[]byte("product123"),
+			[]byte("product456"),
+		}
+
+		for _, key := range testKeys {
+			surf.Add(key)
+		}
+
+		// Test cases
+		tests := []struct {
+			search     []byte
+			wantPrefix []byte
+			wantLength int
+		}{
+			{[]byte("user123456"), []byte("user123"), 7},
+			{[]byte("user"), nil, 0}, // No exact prefix match
+			{[]byte("product123789"), []byte("product123"), 10},
+			{[]byte("nonexistent"), nil, 0},
+			{[]byte("use"), nil, 0},
+		}
+
+		for _, tc := range tests {
+			gotPrefix, gotLength := surf.LongestPrefixSearch(tc.search)
+			if !bytes.Equal(gotPrefix, tc.wantPrefix) || gotLength != tc.wantLength {
+				t.Errorf("LongestPrefixSearch(%s) = (%s, %d), want (%s, %d)",
+					tc.search, gotPrefix, gotLength, tc.wantPrefix, tc.wantLength)
+			}
+		}
+	})
+
+	// We test hierarchical prefixes
+	t.Run("Hierarchical Prefixes", func(t *testing.T) {
+		// Clear previous keys
+		surf = NewSuRF(1000000)
+
+		// Add hierarchical keys
+		hierarchicalKeys := [][]byte{
+			[]byte("/usr/local/bin"),
+			[]byte("/usr/local/lib"),
+			[]byte("/usr/share/doc"),
+			[]byte("/etc/config"),
+		}
+
+		for _, key := range hierarchicalKeys {
+			surf.Add(key)
+		}
+
+		tests := []struct {
+			search     []byte
+			wantPrefix []byte
+			wantLength int
+		}{
+			{[]byte("/usr/local/bin/program"), []byte("/usr/local/bin"), 14},
+			{[]byte("/usr/local/unknown"), nil, 0}, // No exact match exists
+			{[]byte("/usr/share/doc/readme"), []byte("/usr/share/doc"), 14},
+			{[]byte("/etc/config/settings"), []byte("/etc/config"), 11},
+			{[]byte("/var/log"), nil, 0},
+		}
+
+		for _, tc := range tests {
+			gotPrefix, gotLength := surf.LongestPrefixSearch(tc.search)
+			if !bytes.Equal(gotPrefix, tc.wantPrefix) || gotLength != tc.wantLength {
+				t.Errorf("LongestPrefixSearch(%s) = (%s, %d), want (%s, %d)",
+					tc.search, gotPrefix, gotLength, tc.wantPrefix, tc.wantLength)
+			}
+		}
+	})
+
+	// We test some edge cases
+	t.Run("Edge Cases", func(t *testing.T) {
+		// Clear previous keys
+		surf = NewSuRF(1000000)
+
+		edgeCaseKeys := [][]byte{
+			[]byte(""),
+			[]byte("a"),
+			[]byte("ab"),
+			[]byte("abc"),
+			[]byte("abcd"),
+		}
+
+		for _, key := range edgeCaseKeys {
+			surf.Add(key)
+		}
+
+		tests := []struct {
+			search     []byte
+			wantPrefix []byte
+			wantLength int
+		}{
+			{[]byte(""), nil, 0},
+			{[]byte("abcdef"), []byte("abcd"), 4},
+			{[]byte("a"), []byte("a"), 1},
+			{[]byte("ab"), []byte("ab"), 2},
+			{[]byte("abc"), []byte("abc"), 3},
+		}
+
+		for _, tc := range tests {
+			gotPrefix, gotLength := surf.LongestPrefixSearch(tc.search)
+			if !bytes.Equal(gotPrefix, tc.wantPrefix) || gotLength != tc.wantLength {
+				t.Errorf("LongestPrefixSearch(%s) = (%s, %d), want (%s, %d)",
+					tc.search, gotPrefix, gotLength, tc.wantPrefix, tc.wantLength)
+			}
+		}
+	})
+
+	// We test random prefixes with common beginnings
+	t.Run("Random Prefixes", func(t *testing.T) {
+		// Clear previous keys
+		surf = NewSuRF(1000000)
+
+		// Generate keys with common prefixes
+		prefixes := []string{"com", "org", "net", "edu"}
+		var randomKeys [][]byte
+
+		for _, prefix := range prefixes {
+			for i := 0; i < 100; i++ {
+				key := []byte(fmt.Sprintf("%s.domain%d.example", prefix, i))
+				randomKeys = append(randomKeys, key)
+				surf.Add(key)
+			}
+		}
+
+		// Test random searches
+		for i := 0; i < 100; i++ {
+			// Pick a random key and extend it
+			originalKey := randomKeys[rand.Intn(len(randomKeys))]
+			searchKey := append(originalKey, []byte(fmt.Sprintf(".extra%d", i))...)
+
+			prefix, _ := surf.LongestPrefixSearch(searchKey)
+			if !bytes.Equal(prefix, originalKey) {
+				t.Errorf("LongestPrefixSearch(%s) failed: got prefix %s, want %s",
+					searchKey, prefix, originalKey)
+			}
+		}
+	})
+
+	// We test prefixExists function
+	t.Run("PrefixExists", func(t *testing.T) {
+		// Clear previous keys
+		surf = NewSuRF(1000000)
+
+		// Add test keys
+		testKeys := [][]byte{
+			[]byte("http://example.com"),
+			[]byte("https://example.com"),
+			[]byte("ftp://example.com"),
+		}
+
+		for _, key := range testKeys {
+			surf.Add(key)
+		}
+
+		tests := []struct {
+			prefix []byte
+			want   bool
+		}{
+			{[]byte("http"), true},
+			{[]byte("http://"), true},
+			{[]byte("http://example.co"), true},
+			{[]byte("https://example.co"), true},
+			{[]byte("nonexistent"), false},
+		}
+
+		for _, tc := range tests {
+			if got := surf.PrefixExists(tc.prefix); got != tc.want {
+				t.Errorf("PrefixExists(%s) = %v, want %v", tc.prefix, got, tc.want)
 			}
 		}
 	})

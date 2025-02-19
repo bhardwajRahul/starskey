@@ -14,7 +14,7 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 - **WAL with recovery** Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
 - **Key value separation** Keys and values are stored separately for sstables within a klog and vlog respectively.
 - **Bloom filters** Each sstable has an in memory bloom filter to reduce disk reads.
-- **Succinct Range Filters** If enabled will speed up range queries. Will use more memory than bloom filters. Only a bloom filter OR a SuRF filter can be enabled.
+- **Succinct Range Filters** If enabled will speed up range, prefix queries. Will use more memory than bloom filters. Only a bloom filter OR a SuRF filter can be enabled.
 - **Fast** up to 400k+ ops per second.
 - **Compression** S2, and Snappy compression is available.
 - **Logging** Logging to file is available.  Will write to standard out if not enabled.
@@ -109,6 +109,24 @@ if err != nil {
 }
 ```
 
+## Prefix Searches
+### LongestPrefixSearch
+You can search for the longest prefix of a key.
+```go
+results, n, err := skey.LongestPrefixSearch([]byte("key"))
+if err != nil {
+    // ..handle error
+}
+```
+
+### PrefixSearch
+You can search for a prefix of a key.
+```go
+results, err := skey.PrefixSearch([]byte("ke"))
+if err != nil {
+    // ..handle error
+}
+```
 
 ## Acid Transactions
 Using atomic transactions to group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed transactions roll back.
@@ -162,6 +180,13 @@ compareFunc := func(key []byte) bool {
 }
 
 if err := skey.DeleteByFilter(compareFunc); err != nil {
+    // ..handle error
+}
+```
+
+### Delete by key prefix
+```go
+if n, err := skey.DeleteByPrefix([]byte("key")); err != nil {
     // ..handle error
 }
 ```
