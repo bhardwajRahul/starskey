@@ -23,6 +23,7 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -1373,6 +1374,593 @@ func TestStarskey_DeleteByFilter(t *testing.T) {
 	err = starskey.DeleteByFilter(nil)
 	if err == nil {
 		t.Fatal("DeleteByFilter should return error when filter function is nil")
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
+func TestStarskey_LongestPrefixSearch(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2, // Using same threshold as other tests
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Insert test data with different key prefixes
+	testData := []struct {
+		key   string
+		value string
+	}{
+		{"com", "root domain"},
+		{"com.example", "example domain"},
+		{"com.example.www", "www subdomain"},
+		{"com.example.mail", "mail subdomain"},
+		{"com.test", "test domain"},
+		{"org", "org domain"},
+		{"org.example", "example org"},
+	}
+
+	// Insert the test data
+	for _, data := range testData {
+		if err := starskey.Put([]byte(data.key), []byte(data.value)); err != nil {
+			t.Fatalf("Failed to put key-value pair: %v", err)
+		}
+	}
+
+	// Force a flush to ensure data is in SSTables
+	if err := starskey.run(); err != nil {
+		t.Fatalf("Failed to force flush: %v", err)
+	}
+
+	// Test cases
+	tests := []struct {
+		name          string
+		searchKey     string
+		expectedValue string
+		expectedLen   int
+		expectError   bool
+	}{
+		{
+			name:          "Exact match",
+			searchKey:     "com.example",
+			expectedValue: "example domain",
+			expectedLen:   11,
+			expectError:   false,
+		},
+		{
+			name:          "Longer key with existing prefix",
+			searchKey:     "com.example.www.subdomain",
+			expectedValue: "www subdomain",
+			expectedLen:   15,
+			expectError:   false,
+		},
+		{
+			name:          "Partial match",
+			searchKey:     "com.another",
+			expectedValue: "root domain",
+			expectedLen:   3,
+			expectError:   false,
+		},
+		{
+			name:          "No match",
+			searchKey:     "net.example",
+			expectedValue: "",
+			expectedLen:   0,
+			expectError:   false,
+		},
+		{
+			name:          "Empty key",
+			searchKey:     "",
+			expectedValue: "",
+			expectedLen:   0,
+			expectError:   true,
+		},
+	}
+
+	// Run test cases
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			value, length, err := starskey.LongestPrefixSearch([]byte(tc.searchKey))
+
+			// Check error expectation
+			if tc.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			// For no match case
+			if tc.expectedLen == 0 {
+				if value != nil {
+					t.Errorf("Expected no match, but got value: %s", value)
+				}
+				return
+			}
+
+			// Check results
+			if length != tc.expectedLen {
+				t.Errorf("Expected length %d, got %d", tc.expectedLen, length)
+			}
+
+			if !bytes.Equal(value, []byte(tc.expectedValue)) {
+				t.Errorf("Expected value %s, got %s", tc.expectedValue, value)
+			}
+		})
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+
+	// Test with SuRF enabled
+	surfConfig := &Config{
+		Permission:     0755,
+		Directory:      "test_surf",
+		FlushThreshold: 13780 / 2, // Using same threshold as other tests
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+		SuRF:           true,
+	}
+
+	_ = os.RemoveAll("test_surf")
+	defer os.RemoveAll("test_surf")
+
+	starskeyWithSurf, err := Open(surfConfig)
+	if err != nil {
+		t.Fatalf("Failed to open starskey with SuRF: %v", err)
+	}
+
+	// Insert the same test data
+	for _, data := range testData {
+		if err := starskeyWithSurf.Put([]byte(data.key), []byte(data.value)); err != nil {
+			t.Fatalf("Failed to put key-value pair with SuRF: %v", err)
+		}
+	}
+
+	// Force a flush to ensure SuRF is used
+	if err := starskeyWithSurf.run(); err != nil {
+		t.Fatalf("Failed to force flush: %v", err)
+	}
+
+	// Run same tests with SuRF
+	for _, tc := range tests {
+		t.Run(tc.name+"_with_surf", func(t *testing.T) {
+			value, length, err := starskeyWithSurf.LongestPrefixSearch([]byte(tc.searchKey))
+
+			// Check error expectation
+			if tc.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			// For no match case
+			if tc.expectedLen == 0 {
+				if value != nil {
+					t.Errorf("Expected no match, but got value: %s", value)
+				}
+				return
+			}
+
+			// Check results
+			if length != tc.expectedLen {
+				t.Errorf("Expected length %d, got %d", tc.expectedLen, length)
+			}
+
+			if !bytes.Equal(value, []byte(tc.expectedValue)) {
+				t.Errorf("Expected value %s, got %s", tc.expectedValue, value)
+			}
+		})
+	}
+
+	if err := starskeyWithSurf.Close(); err != nil {
+		t.Fatalf("Failed to close starskey with SuRF: %v", err)
+	}
+}
+
+func TestStarskey_DeleteByPrefix(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Insert test data with different prefixes
+	prefixes := []string{"test", "demo", "sample"}
+	keysPerPrefix := 100
+
+	// Insert data
+	for _, prefix := range prefixes {
+		for i := 0; i < keysPerPrefix; i++ {
+			key := []byte(fmt.Sprintf("%s_%03d", prefix, i))
+			value := []byte(fmt.Sprintf("value_%s_%03d", prefix, i))
+			if err := starskey.Put(key, value); err != nil {
+				t.Fatalf("Failed to put key-value pair: %v", err)
+			}
+		}
+	}
+
+	// Force flush to ensure data is in SSTables
+	if err := starskey.run(); err != nil {
+		t.Fatalf("Failed to force flush: %v", err)
+	}
+
+	// Delete all keys with prefix "test"
+	deletedCount, err := starskey.DeleteByPrefix([]byte("test"))
+	if err != nil {
+		t.Fatalf("Failed to delete by prefix: %v", err)
+	}
+
+	// Verify deletion count
+	if deletedCount != keysPerPrefix {
+		t.Errorf("Expected %d deletions, got %d", keysPerPrefix, deletedCount)
+	}
+
+	// Verify deletions and remaining keys
+	for _, prefix := range prefixes {
+		for i := 0; i < keysPerPrefix; i++ {
+			key := []byte(fmt.Sprintf("%s_%03d", prefix, i))
+			value := []byte(fmt.Sprintf("value_%s_%03d", prefix, i))
+			val, err := starskey.Get(key)
+			if err != nil {
+				t.Fatalf("Failed to get key %s: %v", key, err)
+			}
+
+			if prefix == "test" {
+				if val != nil {
+					t.Errorf("Key %s should be deleted but has value %s", key, val)
+				}
+			} else {
+				if !bytes.Equal(val, value) {
+					t.Errorf("Expected value %s for key %s, got %s", value, key, val)
+				}
+			}
+		}
+	}
+
+	// Test invalid prefix
+	count, err := starskey.DeleteByPrefix(nil)
+	if err == nil {
+		t.Error("Expected error for nil prefix but got none")
+	}
+	if count != 0 {
+		t.Errorf("Expected 0 deletions for nil prefix, got %d", count)
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
+func TestStarskey_DeleteByPrefix_SuRF(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+		SuRF:           true,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	prefixes := []string{"test", "demo", "sample"}
+	keysPerPrefix := 100
+
+	// Insert data and force flush after each prefix
+	for _, prefix := range prefixes {
+		for i := 0; i < keysPerPrefix; i++ {
+			key := []byte(fmt.Sprintf("%s_%03d", prefix, i))
+			value := []byte(fmt.Sprintf("value_%s_%03d", prefix, i))
+			if err := starskey.Put(key, value); err != nil {
+				t.Fatalf("Failed to put key-value pair: %v", err)
+			}
+		}
+
+	}
+
+	// Force flush after each prefix
+	if err := starskey.run(); err != nil {
+		t.Fatalf("Failed to force flush: %v", err)
+	}
+
+	// Delete all keys with prefix "test"
+	deletedCount, err := starskey.DeleteByPrefix([]byte("test"))
+	if err != nil {
+		t.Fatalf("Failed to delete by prefix: %v", err)
+	}
+
+	if deletedCount != keysPerPrefix {
+		t.Errorf("Expected %d deletions, got %d", keysPerPrefix, deletedCount)
+	}
+
+	// Verify deletions and remaining keys
+	for _, prefix := range prefixes {
+		for i := 0; i < keysPerPrefix; i++ {
+			key := []byte(fmt.Sprintf("%s_%03d", prefix, i))
+			value := []byte(fmt.Sprintf("value_%s_%03d", prefix, i))
+			val, err := starskey.Get(key)
+			if err != nil {
+				t.Fatalf("Failed to get key %s: %v", key, err)
+			}
+
+			if prefix == "test" {
+				if val != nil {
+					t.Errorf("Key %s should be deleted but has value %s", key, val)
+				}
+			} else {
+				if !bytes.Equal(val, value) {
+					t.Errorf("Expected value %s for key %s, got %s", value, key, val)
+				}
+			}
+		}
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
+func TestStarskey_PrefixSearch(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Insert test data with different prefixes
+	testData := map[string][]struct {
+		key   string
+		value string
+	}{
+		"com": {
+			{"com.example.www", "website"},
+			{"com.example.mail", "email"},
+			{"com.test", "test site"},
+		},
+		"org": {
+			{"org.example", "org site"},
+			{"org.test", "test org"},
+		},
+		"net": {
+			{"net.demo", "demo net"},
+		},
+	}
+
+	// Insert all test data
+	for _, entries := range testData {
+		for _, entry := range entries {
+			if err := starskey.Put([]byte(entry.key), []byte(entry.value)); err != nil {
+				t.Fatalf("Failed to put key-value pair: %v", err)
+			}
+		}
+	}
+
+	// Force flush to ensure data is in SSTables
+	if err := starskey.run(); err != nil {
+		t.Fatalf("Failed to force flush: %v", err)
+	}
+
+	// Test cases
+	tests := []struct {
+		prefix       string
+		expectedKeys int
+	}{
+		{"com", 3},
+		{"com.example", 2},
+		{"org", 2},
+		{"net", 1},
+		{"invalid", 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(fmt.Sprintf("Prefix_%s", tc.prefix), func(t *testing.T) {
+			results, err := starskey.PrefixSearch([]byte(tc.prefix))
+			if err != nil {
+				t.Fatalf("Failed to search prefix %s: %v", tc.prefix, err)
+			}
+
+			if len(results) != tc.expectedKeys {
+				t.Errorf("Expected %d results for prefix %s, got %d", tc.expectedKeys, tc.prefix, len(results))
+			}
+
+			// Verify each result corresponds to a valid key with the prefix
+			resultMap := make(map[string]bool)
+			for _, result := range results {
+				resultMap[string(result)] = true
+			}
+
+			matchCount := 0
+			for _, entries := range testData {
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.key, tc.prefix) {
+						matchCount++
+						if !resultMap[entry.value] {
+							t.Errorf("Expected to find value %s for key %s with prefix %s", entry.value, entry.key, tc.prefix)
+						}
+					}
+				}
+			}
+
+			if matchCount != len(results) {
+				t.Errorf("Number of matches (%d) doesn't match number of results (%d) for prefix %s", matchCount, len(results), tc.prefix)
+			}
+		})
+	}
+
+	// Test invalid prefix
+	results, err := starskey.PrefixSearch(nil)
+	if err == nil {
+		t.Error("Expected error for nil prefix but got none")
+	}
+	if results != nil {
+		t.Errorf("Expected nil results for nil prefix, got %v", results)
+	}
+
+	if err := starskey.Close(); err != nil {
+		t.Fatalf("Failed to close starskey: %v", err)
+	}
+}
+
+func TestStarskey_PrefixSearch_SuRF(t *testing.T) {
+	_ = os.RemoveAll("test")
+	defer func() {
+		_ = os.RemoveAll("test")
+	}()
+
+	config := &Config{
+		Permission:     0755,
+		Directory:      "test",
+		FlushThreshold: 13780 / 2,
+		MaxLevel:       3,
+		SizeFactor:     10,
+		BloomFilter:    false,
+		SuRF:           true,
+	}
+
+	starskey, err := Open(config)
+	if err != nil {
+		t.Fatalf("Failed to open starskey: %v", err)
+	}
+
+	// Insert test data with different prefixes
+	testData := map[string][]struct {
+		key   string
+		value string
+	}{
+		"com": {
+			{"com.example.www", "website"},
+			{"com.example.mail", "email"},
+			{"com.test", "test site"},
+		},
+		"org": {
+			{"org.example", "org site"},
+			{"org.test", "test org"},
+		},
+		"net": {
+			{"net.demo", "demo net"},
+		},
+	}
+
+	// Insert data and force flush after each prefix group
+	for prefix, entries := range testData {
+		for _, entry := range entries {
+			if err := starskey.Put([]byte(entry.key), []byte(entry.value)); err != nil {
+				t.Fatalf("Failed to put key-value pair: %v", err)
+			}
+		}
+		// Force flush after each prefix group
+		if err := starskey.run(); err != nil {
+			t.Fatalf("Failed to force flush after prefix %s: %v", prefix, err)
+		}
+	}
+
+	// Test cases
+	tests := []struct {
+		prefix       string
+		expectedKeys int
+	}{
+		{"com", 3},
+		{"com.example", 2},
+		{"org", 2},
+		{"net", 1},
+		{"invalid", 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(fmt.Sprintf("Prefix_%s_SuRF", tc.prefix), func(t *testing.T) {
+			results, err := starskey.PrefixSearch([]byte(tc.prefix))
+			if err != nil {
+				t.Fatalf("Failed to search prefix %s: %v", tc.prefix, err)
+			}
+
+			if len(results) != tc.expectedKeys {
+				t.Errorf("Expected %d results for prefix %s, got %d", tc.expectedKeys, tc.prefix, len(results))
+			}
+
+			// Verify each result corresponds to a valid key with the prefix
+			resultMap := make(map[string]bool)
+			for _, result := range results {
+				resultMap[string(result)] = true
+			}
+
+			matchCount := 0
+			for _, entries := range testData {
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.key, tc.prefix) {
+						matchCount++
+						if !resultMap[entry.value] {
+							t.Errorf("Expected to find value %s for key %s with prefix %s", entry.value, entry.key, tc.prefix)
+						}
+					}
+				}
+			}
+
+			if matchCount != len(results) {
+				t.Errorf("Number of matches (%d) doesn't match number of results (%d) for prefix %s", matchCount, len(results), tc.prefix)
+			}
+		})
 	}
 
 	if err := starskey.Close(); err != nil {

@@ -87,8 +87,8 @@ func (s *SuRF) Add(key []byte) {
 	}
 
 	node.IsLeaf = true
-	node.Suffix = mixedSuffixBits(key, s.SuffixBits)
-	node.Hash = computeNodeHash(key, path, s.HashBits)
+	node.Suffix = MixedSuffixBits(key, s.SuffixBits)
+	node.Hash = ComputeNodeHash(key, path, s.HashBits)
 	s.TotalKeys++
 
 	// Rebalance if needed
@@ -107,12 +107,12 @@ func (s *SuRF) checkRangeHelper(node *TrieNode, lower, upper []byte, depth int, 
 	}
 
 	if node.IsLeaf {
-		suffix := mixedSuffixBits(lower, s.SuffixBits)
-		upperSuffix := mixedSuffixBits(upper, s.SuffixBits)
+		suffix := MixedSuffixBits(lower, s.SuffixBits)
+		upperSuffix := MixedSuffixBits(upper, s.SuffixBits)
 
 		// Enhanced filtering using both suffix and hash
 		if node.Suffix >= suffix && node.Suffix <= upperSuffix {
-			nodeHash := computeNodeHash(path, path, s.HashBits)
+			nodeHash := ComputeNodeHash(path, path, s.HashBits)
 			if node.Hash == nodeHash {
 				return true
 			}
@@ -149,8 +149,8 @@ func (s *SuRF) checkRangeHelper(node *TrieNode, lower, upper []byte, depth int, 
 	return false
 }
 
-// mixedSuffixBits computes a combined suffix using both hash and real suffix
-func mixedSuffixBits(key []byte, bits int) uint64 {
+// MixedSuffixBits computes a combined suffix using both hash and real suffix
+func MixedSuffixBits(key []byte, bits int) uint64 {
 	if len(key) == 0 {
 		return 0
 	}
@@ -167,8 +167,8 @@ func mixedSuffixBits(key []byte, bits int) uint64 {
 	return ((hashValue & (mask >> 1)) << (bits / 2)) | (realSuffix & ((1 << (bits / 2)) - 1))
 }
 
-// computeNodeHash computes a hash for a node using both key and path
-func computeNodeHash(key []byte, path []byte, bits int) uint64 {
+// ComputeNodeHash computes a hash for a node using both key and path
+func ComputeNodeHash(key []byte, path []byte, bits int) uint64 {
 	combined := append(path, key...)
 	hash := xxhash.Sum64(combined)
 	return hash & ((1 << bits) - 1)
@@ -551,11 +551,76 @@ func (s *SuRF) Contains(key []byte) bool {
 	}
 
 	// Verify both suffix and hash match for better filtering
-	expectedSuffix := mixedSuffixBits(key, s.SuffixBits)
+	expectedSuffix := MixedSuffixBits(key, s.SuffixBits)
 	if node.Suffix != expectedSuffix {
 		return false
 	}
 
-	expectedHash := computeNodeHash(key, path, s.HashBits)
+	expectedHash := ComputeNodeHash(key, path, s.HashBits)
 	return node.Hash == expectedHash
+}
+
+// LongestPrefixSearch returns the longest matching prefix of the given key
+// along with its length. If no prefix is found, returns nil and 0.
+func (s *SuRF) LongestPrefixSearch(key []byte) ([]byte, int) {
+	if len(key) == 0 {
+		return nil, 0
+	}
+
+	node := s.Trie
+	path := make([]byte, 0, len(key))
+	lastMatchPos := -1
+
+	// Track last valid match for prefix
+	var lastMatch []byte
+
+	// Traverse the trie following the key path
+	for i, b := range key {
+		// If we can't go further, break
+		child, exists := node.Children[b]
+		if !exists {
+			break
+		}
+
+		path = append(path, b)
+		node = child
+
+		// If this is a leaf node, verify suffix and hash
+		if node.IsLeaf {
+			expectedSuffix := MixedSuffixBits(path, s.SuffixBits)
+			expectedHash := ComputeNodeHash(path, path, s.HashBits)
+
+			// Only update match if both suffix and hash match
+			if node.Suffix == expectedSuffix && node.Hash == expectedHash {
+				lastMatchPos = i
+				lastMatch = make([]byte, len(path))
+				copy(lastMatch, path)
+			}
+		}
+	}
+
+	if lastMatchPos == -1 {
+		return nil, 0
+	}
+
+	return lastMatch, len(lastMatch)
+}
+
+// PrefixExists checks if a given prefix exists in the trie
+func (s *SuRF) PrefixExists(prefix []byte) bool {
+	if len(prefix) == 0 {
+		return false
+	}
+
+	node := s.Trie
+	for _, b := range prefix {
+		child, exists := node.Children[b]
+		if !exists {
+			return false
+		}
+		node = child
+	}
+
+	// If the node exists, the prefix exists.
+	return true
 }
