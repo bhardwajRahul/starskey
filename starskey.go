@@ -260,6 +260,7 @@ func Open(config *Config) (*Starskey, error) {
 
 	log.Println("Opening write ahead log")
 
+	// We check if optional config is nil, if so we set defaults
 	if config.Optional == nil {
 		log.Println("Default optional config being used")
 		config.Optional = &OptionalConfig{}
@@ -293,29 +294,39 @@ func Open(config *Config) (*Starskey, error) {
 		}
 
 	} else {
+		// If optional config is provided we check if values are valid
+		// if not we set defaults
 		if config.Optional.BackgroundFSyncInterval <= 0 {
+			log.Println("Default optional config being used instead of provided", config.Optional.BackgroundFSyncInterval)
 			config.Optional.BackgroundFSyncInterval = SyncInterval // Set default background fsync interval
 		}
 
 		if config.Optional.TTreeMin <= 0 {
+			log.Println("Default optional config being used instead of provided", config.Optional.TTreeMin)
 			config.Optional.TTreeMin = TTreeMin // Set default TTreeMin
 		}
 
 		if config.Optional.TTreeMax <= 0 {
+			log.Println("Default optional config being used instead of provided", config.Optional.TTreeMax)
 			config.Optional.TTreeMax = TTreeMax // Set default TTreeMax
 		}
 
 		if config.Optional.PageSize <= 0 {
+			log.Println("Default optional config being used instead of provided", config.Optional.PageSize)
 			config.Optional.PageSize = PageSize // Set default PageSize
 		}
 
 		if config.Optional.BloomFilterProbability <= 0 {
+			log.Println("Default optional config being used instead of provided", config.Optional.BloomFilterProbability)
 			config.Optional.BloomFilterProbability = BloomFilterProbability // Set default BloomFilterProbability
 		}
 
 		if config.Optional.BackgroundFSyncInterval <= 0 {
+			log.Println("Default optional config being used instead of provided", config.Optional.BackgroundFSyncInterval)
 			config.Optional.BackgroundFSyncInterval = SyncInterval // Set default background fsync interval
 		}
+
+		// We log the usage of optional configs for the user
 
 		log.Println("Optional config:")
 		log.Println("  > BackgroundFSync:         ", config.Optional.BackgroundFSync)
@@ -1470,6 +1481,7 @@ func (skey *Starskey) run() error {
 
 	// Check if compaction is needed
 	if skey.levels[0].shouldCompact() {
+		// We start from l0
 		if err := skey.compact(0); err != nil {
 			return err
 		}
@@ -1478,7 +1490,8 @@ func (skey *Starskey) run() error {
 	return nil
 }
 
-// compact compacts a level
+// compact compacts level(s) recursively
+// only if the level is full based on the max size
 func (skey *Starskey) compact(level int) error {
 	log.Println("Compacting level", level)
 	// Ensure we do not go beyond the last level
