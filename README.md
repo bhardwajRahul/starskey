@@ -113,7 +113,7 @@ if err != nil {
 ### LongestPrefixSearch
 You can search for the longest prefix of a key.
 ```go
-results, n, err := skey.LongestPrefixSearch([]byte("key"))
+result, n, err := skey.LongestPrefixSearch([]byte("key"))
 if err != nil {
     // ..handle error
 }
@@ -189,6 +189,7 @@ if err := skey.DeleteByFilter(compareFunc); err != nil {
 if n, err := skey.DeleteByPrefix([]byte("key")); err != nil {
     // ..handle error
 }
+// n is amount of keys deleted
 ```
 
 ## Key Lifecycle
