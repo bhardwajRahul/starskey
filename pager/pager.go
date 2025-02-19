@@ -39,9 +39,9 @@ type Pager struct {
 	pageSize     int             // Size of each page.. if data overflows new pages are created and linked
 	syncQuit     chan struct{}   // Channel to quit background fsync
 	wg           *sync.WaitGroup // WaitGroup for background fsync
-	syncInterval time.Duration   // Fsync interval
+	syncInterval time.Duration   // File sync interval
 	sync         bool            // To sync or not to sync
-	closed       atomic.Bool     // Add this field to track if already closed
+	closed       atomic.Bool     // We use to track if we have closed the pager already to prevent double closing
 }
 
 // Iterator is the iterator struct used for
@@ -51,7 +51,7 @@ type Iterator struct {
 	pageStack   []int  // Stack of page numbers
 	currentPage int    // Current page number
 	CurrentData []byte // Current data
-	maxPages    int    // Max pages
+	maxPages    int    // Max pages based on file size calculation
 }
 
 // Open opens a file for paging
@@ -239,7 +239,7 @@ func (p *Pager) newPageNumber() int64 {
 	if err != nil {
 		return 0
 	}
-	return fileInfo.Size() / int64(p.pageSize+16)
+	return fileInfo.Size() / int64(p.pageSize+16) // We add 16 bytes for the page header
 }
 
 // Read reads a page from the file
