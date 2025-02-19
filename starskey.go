@@ -44,14 +44,31 @@ var (
 	BloomFilterExtension   = ".bf"                          // bloom filter extension
 	SuRFExtension          = ".srf"                         // SuRF extension
 	SSTPrefix              = "sst_"                         // SSTable prefix
-	LevelPrefix            = "l"                            // Level prefix
-	PageSize               = 128                            // Page size, smaller is better.  The pager handles overflowing in sequence. 1024, or 1024 will cause VERY large files.
-	SyncInterval           = time.Millisecond * 512         // File sync interval
+	LevelPrefix            = "l"                            // Level prefix, i.e l1, l2, l3, etc.
+	PageSize               = 128                            // Page size (default), smaller is better.  The pager handles overflowing in sequence. 1024, or 1024 will cause VERY large files.
+	SyncInterval           = time.Millisecond * 256         // File sync interval (default)
 	Tombstone              = []byte{0xDE, 0xAD, 0xBE, 0xEF} // Tombstone value
-	TTreeMin               = 12                             // Minimum degree of the T-Tree
-	TTreeMax               = 32                             // Maximum degree of the T-Tree
-	BloomFilterProbability = 0.01                           // Bloom filter probability
+	TTreeMin               = 12                             // Minimum degree of the T-Tree (default)
+	TTreeMax               = 32                             // Maximum degree of the T-Tree (default)
+	BloomFilterProbability = 0.01                           // Bloom filter probability (default)
 )
+
+// OptionalConfig represents optional configuration for starskey instance
+// Mainly configurations for internal data structures and operations
+// BackgroundFSync default is true
+// BackgroundFSyncInterval default is 256ms
+// TTreeMin default is 12
+// TTreeMax default is 32
+// PageSize default is 128
+// BloomFilterProbability default is 0.01
+type OptionalConfig struct {
+	BackgroundFSync         bool          // You can optionally opt to not fsync writes to disk
+	BackgroundFSyncInterval time.Duration // Interval for background fsync, if configured true
+	TTreeMin                int           // Minimum degree of the T-Tree
+	TTreeMax                int           // Maximum degree of the T-Tree
+	PageSize                int           // Page size
+	BloomFilterProbability  float64       // Bloom filter probability
+}
 
 // Config represents the configuration for starskey instance
 type Config struct {
@@ -65,6 +82,7 @@ type Config struct {
 	Compression       bool              // Enable compression
 	CompressionOption CompressionOption // Desired compression option
 	SuRF              bool              // Enable SuRF
+	Optional          *OptionalConfig   // Optional configurations
 }
 
 // Level represents a disk level
@@ -242,9 +260,77 @@ func Open(config *Config) (*Starskey, error) {
 
 	log.Println("Opening write ahead log")
 
+	if config.Optional == nil {
+		log.Println("Default optional config being used")
+		config.Optional = &OptionalConfig{}
+
+		if config.Optional.BackgroundFSync == false {
+			config.Optional.BackgroundFSync = true // Set default background fsync
+		}
+
+		if config.Optional.BackgroundFSyncInterval <= 0 {
+			config.Optional.BackgroundFSyncInterval = SyncInterval // Set default background fsync interval
+		}
+
+		if config.Optional.TTreeMin <= 0 {
+			config.Optional.TTreeMin = TTreeMin // Set default TTreeMin
+		}
+
+		if config.Optional.TTreeMax <= 0 {
+			config.Optional.TTreeMax = TTreeMax // Set default TTreeMax
+		}
+
+		if config.Optional.PageSize <= 0 {
+			config.Optional.PageSize = PageSize // Set default PageSize
+		}
+
+		if config.Optional.BloomFilterProbability <= 0 {
+			config.Optional.BloomFilterProbability = BloomFilterProbability // Set default BloomFilterProbability
+		}
+
+		if config.Optional.BackgroundFSyncInterval <= 0 {
+			config.Optional.BackgroundFSyncInterval = SyncInterval // Set default background fsync interval
+		}
+
+	} else {
+		if config.Optional.BackgroundFSyncInterval <= 0 {
+			config.Optional.BackgroundFSyncInterval = SyncInterval // Set default background fsync interval
+		}
+
+		if config.Optional.TTreeMin <= 0 {
+			config.Optional.TTreeMin = TTreeMin // Set default TTreeMin
+		}
+
+		if config.Optional.TTreeMax <= 0 {
+			config.Optional.TTreeMax = TTreeMax // Set default TTreeMax
+		}
+
+		if config.Optional.PageSize <= 0 {
+			config.Optional.PageSize = PageSize // Set default PageSize
+		}
+
+		if config.Optional.BloomFilterProbability <= 0 {
+			config.Optional.BloomFilterProbability = BloomFilterProbability // Set default BloomFilterProbability
+		}
+
+		if config.Optional.BackgroundFSyncInterval <= 0 {
+			config.Optional.BackgroundFSyncInterval = SyncInterval // Set default background fsync interval
+		}
+
+		log.Println("Optional config:")
+		log.Println("  > BackgroundFSync:         ", config.Optional.BackgroundFSync)
+		log.Println("  > BackgroundFSyncInterval: ", config.Optional.BackgroundFSyncInterval)
+		log.Println("  > TTreeMin:                ", config.Optional.TTreeMin)
+		log.Println("  > TTreeMax:                ", config.Optional.TTreeMax)
+		log.Println("  > PageSize:                ", config.Optional.PageSize)
+		log.Println("  > BloomFilterProbability:  ", config.Optional.BloomFilterProbability)
+	}
+
+	log.Println("Background file sync interval: ", config.Optional.BackgroundFSyncInterval)
+
 	// We create/open the write-ahead log within the configured directory
 	walPath := config.Directory + WALExtension
-	wal, err := pager.Open(walPath, os.O_RDWR|os.O_CREATE, config.Permission, PageSize, true, SyncInterval)
+	wal, err := pager.Open(walPath, os.O_RDWR|os.O_CREATE, config.Permission, PageSize, config.Optional.BackgroundFSync, config.Optional.BackgroundFSyncInterval)
 	if err != nil {
 		return nil, err
 	}
@@ -329,6 +415,7 @@ func (skey *Starskey) Close() error {
 	return nil
 }
 
+// appendToWal appends a WAL record to the write-ahead log
 func (skey *Starskey) appendToWal(record *WALRecord) error {
 	// Serialize the WAL record
 	walSerialized, err := serializeWalRecord(record, skey.config.Compression, skey.config.CompressionOption)
@@ -630,13 +717,6 @@ func (skey *Starskey) Range(startKey, endKey []byte) ([][]byte, error) {
 
 			it := pager.NewIterator(klog)
 
-			// If bloom is configured skip first page which is the bloom filter
-			if skey.config.BloomFilter {
-				if !it.Next() {
-					continue
-				}
-			}
-
 			for it.Next() {
 				data, err := it.Read()
 				if err != nil {
@@ -713,12 +793,6 @@ func (skey *Starskey) FilterKeys(compare func(key []byte) bool) ([][]byte, error
 			vlog := sstable.vlog
 
 			it := pager.NewIterator(klog)
-
-			if skey.config.BloomFilter {
-				if !it.Next() {
-					continue
-				}
-			}
 
 			for it.Next() {
 				data, err := it.Read()
@@ -1042,7 +1116,7 @@ func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SST
 				// Open the key log
 				klogPath := fmt.Sprintf("%s%s", directory, file.Name())
 				log.Println("Opening SSTable klog", klogPath)
-				klog, err := pager.Open(klogPath, os.O_CREATE|os.O_RDWR, perm, PageSize, true, SyncInterval)
+				klog, err := pager.Open(klogPath, os.O_CREATE|os.O_RDWR, perm, PageSize, false, SyncInterval)
 				if err != nil {
 					return nil, err
 				}
@@ -1050,7 +1124,7 @@ func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SST
 				// Open the value log for the key log
 				vlogPath := strings.TrimRight(klogPath, KLogExtension) + VLogExtension
 				log.Println("Opening SSTable vlog", vlogPath)
-				vlog, err := pager.Open(vlogPath, os.O_CREATE|os.O_RDWR, perm, PageSize, true, SyncInterval)
+				vlog, err := pager.Open(vlogPath, os.O_CREATE|os.O_RDWR, perm, PageSize, false, SyncInterval)
 				if err != nil {
 					return nil, err
 				}
@@ -1157,13 +1231,13 @@ func (skey *Starskey) run() error {
 	ti := time.Now()
 	// Create a new key log
 	// i.e db_directory/l1/sst_1612345678.klog
-	klog, err := pager.Open(fmt.Sprintf("%sl1%s%s%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), KLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	klog, err := pager.Open(fmt.Sprintf("%sl1%s%s%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), KLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, skey.config.Optional.BackgroundFSync, skey.config.Optional.BackgroundFSyncInterval)
 	if err != nil {
 		return err
 	}
 
 	// Create a new value log
-	vlog, err := pager.Open(fmt.Sprintf("%sl1%s%s%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), VLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	vlog, err := pager.Open(fmt.Sprintf("%sl1%s%s%d%s", skey.config.Directory, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), VLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, skey.config.Optional.BackgroundFSync, skey.config.Optional.BackgroundFSyncInterval)
 	if err != nil {
 		_ = klog.Close()
 		_ = os.Remove(klog.Name())
@@ -1528,13 +1602,13 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 	ti := time.Now()
 
 	// Create a new key log
-	klog, err := pager.Open(fmt.Sprintf("%sl%d%s%s%d%s", skey.config.Directory, level+1, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), KLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	klog, err := pager.Open(fmt.Sprintf("%sl%d%s%s%d%s", skey.config.Directory, level+1, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), KLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, skey.config.Optional.BackgroundFSync, skey.config.Optional.BackgroundFSyncInterval)
 	if err != nil {
 		return nil
 	}
 
 	// Create a new value log
-	vlog, err := pager.Open(fmt.Sprintf("%sl%d%s%s%d%s", skey.config.Directory, level+1, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), VLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, true, SyncInterval)
+	vlog, err := pager.Open(fmt.Sprintf("%sl%d%s%s%d%s", skey.config.Directory, level+1, string(os.PathSeparator), SSTPrefix, ti.UnixMicro(), VLogExtension), os.O_CREATE|os.O_RDWR, skey.config.Permission, PageSize, skey.config.Optional.BackgroundFSync, skey.config.Optional.BackgroundFSyncInterval)
 	if err != nil {
 		_ = klog.Close()
 		_ = os.Remove(klog.Name())
@@ -2040,59 +2114,75 @@ func deserializeVLogRecord(data []byte, decompress bool, option CompressionOptio
 }
 
 // DeleteByRange deletes all keys in the given range [startKey, endKey]
-func (skey *Starskey) DeleteByRange(startKey, endKey []byte) error {
+func (skey *Starskey) DeleteByRange(startKey, endKey []byte) (int, error) {
 	if len(startKey) == 0 {
-		return errors.New("start key cannot be empty")
+		return 0, errors.New("start key cannot be empty")
 	}
 	if len(endKey) == 0 {
-		return errors.New("end key cannot be empty")
+		return 0, errors.New("end key cannot be empty")
 	}
 	if bytes.Compare(startKey, endKey) > 0 {
-		return errors.New("start key cannot be greater than end key")
+		return 0, errors.New("start key cannot be greater than end key")
 	}
 
+	// Lock for thread safety
 	skey.lock.Lock()
 	defer skey.lock.Unlock()
 
+	// Track seen keys across all levels
 	seenKeys := make(map[string]struct{})
+	deletedCount := 0
 
 	// Check memtable first
 	entries := skey.memtable.Range(startKey, endKey)
 	for _, entry := range entries {
-		// Skip if already tombstoned
-		if bytes.Equal(entry.Value, Tombstone) {
+		// Skip if we've already seen this key
+		if _, seen := seenKeys[string(entry.Key)]; seen {
 			continue
 		}
+
+		// Skip if already tombstoned
+		if bytes.Equal(entry.Value, Tombstone) {
+			seenKeys[string(entry.Key)] = struct{}{}
+			continue
+		}
+
+		// Mark key as seen
 		seenKeys[string(entry.Key)] = struct{}{}
 
+		// Create WAL record
 		err := skey.appendToWal(&WALRecord{
 			Key:   entry.Key,
 			Value: Tombstone,
 			Op:    Delete,
 		})
 		if err != nil {
-			return err
+			return deletedCount, err
 		}
 
+		// Add tombstone to memtable
 		err = skey.memtable.Put(entry.Key, Tombstone)
 		if err != nil {
-			return err
+			return deletedCount, err
 		}
 
-		// If we are writing a tombstone we need to check each sstable and delete from surf and bloom filter
+		// Handle tombstone side effects (bloom filter, SuRF updates)
 		err = skey.handleTombstones(entry.Key, Tombstone)
 		if err != nil {
-			return err
+			return deletedCount, err
 		}
+
+		deletedCount++
 	}
 
-	// Process SSTables
+	// Process each level
 	for _, level := range skey.levels {
 		for _, sstable := range level.sstables {
 			if sstable == nil {
 				continue
 			}
 
+			// Use SuRF optimization if available
 			if skey.config.SuRF && sstable.surf != nil {
 				if !sstable.surf.CheckRange(startKey, endKey) {
 					continue
@@ -2101,113 +2191,148 @@ func (skey *Starskey) DeleteByRange(startKey, endKey []byte) error {
 
 			it := pager.NewIterator(sstable.klog)
 
-			if skey.config.BloomFilter {
-				if !it.Next() {
-					continue
-				}
-			}
-
+			// Scan through keys in this SSTable
 			for it.Next() {
 				data, err := it.Read()
 				if err != nil {
-					return err
+					return deletedCount, err
 				}
 
 				klogRecord, err := deserializeKLogRecord(data, skey.config.Compression, skey.config.CompressionOption)
 				if err != nil {
-					return err
+					return deletedCount, err
 				}
 
+				// Check if key is in range
 				if bytes.Compare(klogRecord.Key, startKey) >= 0 && bytes.Compare(klogRecord.Key, endKey) <= 0 {
+					// Skip if we've already seen this key
 					if _, seen := seenKeys[string(klogRecord.Key)]; seen {
 						continue
 					}
 
-					// Read current value to check if already tombstoned
+					// Check if already tombstoned
 					read, _, err := sstable.vlog.Read(int(klogRecord.ValPageNum))
 					if err != nil {
-						return err
+						return deletedCount, err
 					}
 
 					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
 					if err != nil {
-						return err
+						return deletedCount, err
 					}
 
 					// Skip if already tombstoned
 					if bytes.Equal(vlogRecord.Value, Tombstone) {
+						seenKeys[string(klogRecord.Key)] = struct{}{}
 						continue
 					}
 
+					// Mark key as seen
 					seenKeys[string(klogRecord.Key)] = struct{}{}
 
+					// Create WAL record
 					err = skey.appendToWal(&WALRecord{
 						Key:   klogRecord.Key,
 						Value: Tombstone,
 						Op:    Delete,
 					})
 					if err != nil {
-						return err
+						return deletedCount, err
 					}
 
+					// Add tombstone to memtable
 					err = skey.memtable.Put(klogRecord.Key, Tombstone)
 					if err != nil {
-						return err
+						return deletedCount, err
 					}
 
+					// Handle tombstone side effects
 					err = skey.handleTombstones(klogRecord.Key, Tombstone)
 					if err != nil {
-						return err
+						return deletedCount, err
 					}
 
+					deletedCount++
 				}
 			}
 		}
 	}
 
-	if skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
+	// Check if compaction is needed
+	if deletedCount > 0 && skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
 		if err := skey.run(); err != nil {
-			return err
+			return deletedCount, err
 		}
 	}
 
-	return nil
+	return deletedCount, nil
 }
 
 // DeleteByFilter deletes all keys that match the given filter function
-func (skey *Starskey) DeleteByFilter(compare func(key []byte) bool) error {
+func (skey *Starskey) DeleteByFilter(compare func(key []byte) bool) (int, error) {
 	// Validate filter function
 	if compare == nil {
-		return errors.New("filter function cannot be nil")
+		return 0, errors.New("filter function cannot be nil")
 	}
 
 	// Lock for thread safety
 	skey.lock.Lock()
 	defer skey.lock.Unlock()
 
-	// Delete matching keys from memtable first
+	// Track seen keys across all levels
+	seenKeys := make(map[string]struct{})
+	deletedCount := 0
+
+	// Check memtable first
 	iter := skey.memtable.NewIterator(false)
 	for iter.Valid() {
 		if entry, ok := iter.Current(); ok {
+			// Skip if we've already seen this key
+			if _, seen := seenKeys[string(entry.Key)]; seen {
+				if !iter.HasNext() {
+					break
+				}
+				iter.Next()
+				continue
+			}
+
 			if compare(entry.Key) {
+				// Skip if already tombstoned
+				if bytes.Equal(entry.Value, Tombstone) {
+					seenKeys[string(entry.Key)] = struct{}{}
+					if !iter.HasNext() {
+						break
+					}
+					iter.Next()
+					continue
+				}
+
+				// Mark key as seen
+				seenKeys[string(entry.Key)] = struct{}{}
+
+				// Create WAL record
 				err := skey.appendToWal(&WALRecord{
 					Key:   entry.Key,
 					Value: Tombstone,
 					Op:    Delete,
 				})
 				if err != nil {
-					return err
+					return deletedCount, err
 				}
 
+				// Add tombstone to memtable
 				err = skey.memtable.Put(entry.Key, Tombstone)
 				if err != nil {
-					return err
+					return deletedCount, err
 				}
 
+				// Handle tombstone side effects
 				err = skey.handleTombstones(entry.Key, Tombstone)
 				if err != nil {
-					return err
+					return deletedCount, err
 				}
+
+				deletedCount++
 			}
 		}
 		if !iter.HasNext() {
@@ -2225,52 +2350,83 @@ func (skey *Starskey) DeleteByFilter(compare func(key []byte) bool) error {
 
 			// Create iterator for key log
 			it := pager.NewIterator(sstable.klog)
+
 			for it.Next() {
 				data, err := it.Read()
 				if err != nil {
-					return err
+					return deletedCount, err
 				}
 
 				klogRecord, err := deserializeKLogRecord(data,
 					skey.config.Compression,
 					skey.config.CompressionOption)
 				if err != nil {
-					return err
+					return deletedCount, err
+				}
+
+				// Skip if we've already seen this key
+				if _, seen := seenKeys[string(klogRecord.Key)]; seen {
+					continue
 				}
 
 				// Check if key matches filter
 				if compare(klogRecord.Key) {
+					// Check if already tombstoned
+					read, _, err := sstable.vlog.Read(int(klogRecord.ValPageNum))
+					if err != nil {
+						return deletedCount, err
+					}
+
+					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
+					if err != nil {
+						return deletedCount, err
+					}
+
+					// Skip if already tombstoned
+					if bytes.Equal(vlogRecord.Value, Tombstone) {
+						seenKeys[string(klogRecord.Key)] = struct{}{}
+						continue
+					}
+
+					// Mark key as seen
+					seenKeys[string(klogRecord.Key)] = struct{}{}
+
+					// Create WAL record
 					err = skey.appendToWal(&WALRecord{
 						Key:   klogRecord.Key,
 						Value: Tombstone,
 						Op:    Delete,
 					})
 					if err != nil {
-						return err
+						return deletedCount, err
 					}
 
+					// Add tombstone to memtable
 					err = skey.memtable.Put(klogRecord.Key, Tombstone)
 					if err != nil {
-						return err
+						return deletedCount, err
 					}
 
+					// Handle tombstone side effects
 					err = skey.handleTombstones(klogRecord.Key, Tombstone)
 					if err != nil {
-						return err
+						return deletedCount, err
 					}
+
+					deletedCount++
 				}
 			}
 		}
 	}
 
-	// Check if memtable needs to be flushed
-	if skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
+	// Check if compaction is needed
+	if deletedCount > 0 && skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
 		if err := skey.run(); err != nil {
-			return err
+			return deletedCount, err
 		}
 	}
 
-	return nil
+	return deletedCount, nil
 }
 
 // LongestPrefixSearch finds the longest matching prefix for a given key
@@ -2370,13 +2526,6 @@ func (skey *Starskey) LongestPrefixSearch(key []byte) ([]byte, int, error) {
 
 			it := pager.NewIterator(klog)
 
-			// Skip bloom filter page if configured
-			if skey.config.BloomFilter {
-				if !it.Next() {
-					continue
-				}
-			}
-
 			for it.Next() {
 				data, err := it.Read()
 				if err != nil {
@@ -2436,13 +2585,38 @@ func (skey *Starskey) DeleteByPrefix(prefix []byte) (int, error) {
 	skey.lock.Lock()
 	defer skey.lock.Unlock()
 
+	// Track seen keys across all levels
+	seenKeys := make(map[string]struct{})
 	deletedCount := 0
 
-	// We delete matching keys from memtable first
+	// Check memtable first
 	iter := skey.memtable.NewIterator(false)
 	for iter.Valid() {
 		if entry, ok := iter.Current(); ok {
+			// Skip if we've already seen this key
+			if _, seen := seenKeys[string(entry.Key)]; seen {
+				if !iter.HasNext() {
+					break
+				}
+				iter.Next()
+				continue
+			}
+
 			if bytes.HasPrefix(entry.Key, prefix) {
+				// Skip if already tombstoned
+				if bytes.Equal(entry.Value, Tombstone) {
+					seenKeys[string(entry.Key)] = struct{}{}
+					if !iter.HasNext() {
+						break
+					}
+					iter.Next()
+					continue
+				}
+
+				// Mark key as seen
+				seenKeys[string(entry.Key)] = struct{}{}
+
+				// Create WAL record
 				err := skey.appendToWal(&WALRecord{
 					Key:   entry.Key,
 					Value: Tombstone,
@@ -2452,11 +2626,13 @@ func (skey *Starskey) DeleteByPrefix(prefix []byte) (int, error) {
 					return 0, err
 				}
 
+				// Add tombstone to memtable
 				err = skey.memtable.Put(entry.Key, Tombstone)
 				if err != nil {
 					return 0, err
 				}
 
+				// Handle tombstone side effects
 				err = skey.handleTombstones(entry.Key, Tombstone)
 				if err != nil {
 					return 0, err
@@ -2478,6 +2654,7 @@ func (skey *Starskey) DeleteByPrefix(prefix []byte) (int, error) {
 				continue
 			}
 
+			// Use SuRF optimization if available
 			if skey.config.SuRF && sstable.surf != nil {
 				if !sstable.surf.PrefixExists(prefix) {
 					continue
@@ -2486,6 +2663,7 @@ func (skey *Starskey) DeleteByPrefix(prefix []byte) (int, error) {
 
 			// Create iterator for key log
 			it := pager.NewIterator(sstable.klog)
+
 			for it.Next() {
 				data, err := it.Read()
 				if err != nil {
@@ -2499,8 +2677,34 @@ func (skey *Starskey) DeleteByPrefix(prefix []byte) (int, error) {
 					return 0, err
 				}
 
+				// Skip if we've already seen this key
+				if _, seen := seenKeys[string(klogRecord.Key)]; seen {
+					continue
+				}
+
 				// Check if key matches prefix
 				if bytes.HasPrefix(klogRecord.Key, prefix) {
+					// Check if already tombstoned
+					read, _, err := sstable.vlog.Read(int(klogRecord.ValPageNum))
+					if err != nil {
+						return 0, err
+					}
+
+					vlogRecord, err := deserializeVLogRecord(read, skey.config.Compression, skey.config.CompressionOption)
+					if err != nil {
+						return 0, err
+					}
+
+					// Skip if already tombstoned
+					if bytes.Equal(vlogRecord.Value, Tombstone) {
+						seenKeys[string(klogRecord.Key)] = struct{}{}
+						continue
+					}
+
+					// Mark key as seen
+					seenKeys[string(klogRecord.Key)] = struct{}{}
+
+					// Create WAL record
 					err = skey.appendToWal(&WALRecord{
 						Key:   klogRecord.Key,
 						Value: Tombstone,
@@ -2510,11 +2714,13 @@ func (skey *Starskey) DeleteByPrefix(prefix []byte) (int, error) {
 						return 0, err
 					}
 
+					// Add tombstone to memtable
 					err = skey.memtable.Put(klogRecord.Key, Tombstone)
 					if err != nil {
 						return 0, err
 					}
 
+					// Handle tombstone side effects
 					err = skey.handleTombstones(klogRecord.Key, Tombstone)
 					if err != nil {
 						return 0, err
@@ -2526,8 +2732,8 @@ func (skey *Starskey) DeleteByPrefix(prefix []byte) (int, error) {
 		}
 	}
 
-	// Check if memtable needs to be flushed
-	if skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
+	// Check if compaction is needed
+	if deletedCount > 0 && skey.memtable.SizeOfTree >= skey.config.FlushThreshold {
 		if err := skey.run(); err != nil {
 			return 0, err
 		}

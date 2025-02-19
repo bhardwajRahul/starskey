@@ -29,6 +29,7 @@ import (
 	"math"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,6 +41,7 @@ type Pager struct {
 	wg           *sync.WaitGroup // WaitGroup for background fsync
 	syncInterval time.Duration   // Fsync interval
 	sync         bool            // To sync or not to sync
+	closed       atomic.Bool     // Add this field to track if already closed
 }
 
 // Iterator is the iterator struct used for
@@ -66,6 +68,10 @@ func Open(filename string, flag int, perm os.FileMode, pageSize int, syncOn bool
 	if !pager.sync {
 		return pager, nil
 	}
+
+	// Initialize closed to false
+	pager.closed.Store(false)
+
 	// Start background sync
 	pager.wg.Add(1)
 	go pager.backgroundSync()
@@ -82,7 +88,9 @@ func (p *Pager) Close() error {
 	if p.file == nil {
 		return nil
 	}
-	if p.sync {
+
+	// Only close channel if sync is enabled and we haven't closed before
+	if p.sync && !p.closed.Swap(true) {
 		close(p.syncQuit)
 		p.wg.Wait()
 	}
