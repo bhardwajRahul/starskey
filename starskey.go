@@ -1452,7 +1452,7 @@ func (skey *Starskey) run() error {
 
 	// Check if compaction is needed
 	if skey.levels[0].shouldCompact() {
-		// We start from l0
+		// We start from l1
 		if err := skey.compact(0); err != nil {
 			return err
 		}
@@ -1464,7 +1464,7 @@ func (skey *Starskey) run() error {
 // compact compacts level(s) recursively
 // only if the level is full based on the max size
 func (skey *Starskey) compact(level int) error {
-	log.Println("Compacting level", level)
+	log.Println("Compacting level", level+1)
 	// Ensure we do not go beyond the last level
 	if level >= len(skey.levels)-1 {
 		// Handle the case when the last level is full
@@ -1501,11 +1501,6 @@ func (skey *Starskey) compact(level int) error {
 	// Select subset of tables for partial compaction
 	numTablesToCompact := len(skey.levels[level].sstables) / 2
 
-	// In case number of sstables is less than 2
-	if numTablesToCompact < 2 {
-		numTablesToCompact = 2 // Like this we ensure we merge at least 2 sst's
-	}
-
 	tablesToCompact := skey.levels[level].sstables[:numTablesToCompact]
 
 	// Merge selected tables
@@ -1533,7 +1528,7 @@ func (skey *Starskey) compact(level int) error {
 	// Remove compacted tables from current level
 	skey.levels[level].sstables = skey.levels[level].sstables[numTablesToCompact:]
 
-	log.Println("Compaction of level", level, "completed successfully")
+	log.Println("Compaction of level", level+1, "completed successfully") // We add a +1 for logging as l0 is memtable l1 is start of disk levels..
 
 	// Recursively check next level
 	if nextLevel.shouldCompact() {
