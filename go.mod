@@ -1,6 +1,6 @@
 module github.com/starskey-io/starskey
 
-go 1.23
+go 1.24
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0

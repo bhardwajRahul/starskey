@@ -27,13 +27,13 @@ import (
 	"sync"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson" // It's fast and simple for our use case
 	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/snappy"
 	"github.com/starskey-io/starskey/bloomfilter"
 	"github.com/starskey-io/starskey/pager"
 	"github.com/starskey-io/starskey/surf"
 	"github.com/starskey-io/starskey/ttree"
+	"go.mongodb.org/mongo-driver/bson" // It's fast and simple for our use case
 )
 
 // Global system variables
@@ -1273,7 +1273,7 @@ func (skey *Starskey) run() error {
 
 		log.Printf("Creating SuRF for run with %d entries\n", mtCount)
 
-		srf := surf.NewSuRF(int(mtCount))
+		srf := surf.New(int(mtCount))
 
 		iter := skey.memtable.NewIterator(false)
 		for iter.Valid() {
@@ -1880,7 +1880,7 @@ func (sst *SSTable) createBloomFilter(skey *Starskey) error {
 // createSuRF creates a SuRF filter for the SSTable
 func (sst *SSTable) createSuRF(skey *Starskey) error {
 	// Create a new SuRF with size based on the number of pages in key log
-	surf := surf.NewSuRF(sst.klog.PageCount() * 2)
+	surf := surf.New(sst.klog.PageCount() * 2)
 	if surf == nil {
 		return errors.New("failed to create SuRF filter")
 	}
