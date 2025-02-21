@@ -162,7 +162,30 @@ if err := txn.Commit(); err != nil {
 
 **OR**
 
-You should use `Update` if you want to say Get a value, modify it and then Put it back.
+You should use `Update` if you want to say Get a value, modify it and then Put it back as an atomic operation.
+Say you want to increment a value, below is an example of how to do that.
+```go
+err = skey.Update(func(txn *Txn) error {
+    value, err := txn.Get([]byte("key"))
+    if err != nil {
+        return err
+    }
+
+    // Increment value
+    i, err := strconv.Atoi(string(value))
+    if err != nil {
+        return err
+    }
+
+    i++ // Increment value
+
+    return txn.Put([]byte("key"), []byte(strconv.Itoa(i))) // Put back incremented value, this update is atomic
+
+})
+if err != nil {
+    // ..handle error
+}
+```
 
 ```go
 err = skey.Update(func(txn *Txn) error {
