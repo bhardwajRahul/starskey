@@ -28,7 +28,7 @@ import (
 // TestSuRF tests the SuRF implementation with 1 million random keys and range checks
 func TestSuRF(t *testing.T) {
 	rand.Seed(time.Now().UnixNano())
-	surf := NewSuRF(8)
+	surf := New(8)
 	keys := make([][]byte, 1000000)
 
 	// Insert 1 million random keys
@@ -79,7 +79,7 @@ func TestSuRF_2(t *testing.T) {
 	rand.Seed(time.Now().UnixNano())
 
 	// Initialize SuRF with an estimated number of keys
-	surf := NewSuRF(1000000)
+	surf := New(1000000)
 
 	// Insert sequential keys
 	seqKeys := generateSequentialKeys(100000)
@@ -151,7 +151,7 @@ func TestSuRF_3(t *testing.T) {
 	rand.Seed(time.Now().UnixNano())
 
 	// Initialize SuRF with an estimated number of keys
-	surf := NewSuRF(1000000)
+	surf := New(1000000)
 
 	// Define key categories
 	keyPrefixes := []string{"usr", "prod", "txn", "log", "sys"}
@@ -238,7 +238,7 @@ func TestSuRF_Contains(t *testing.T) {
 	rand.Seed(time.Now().UnixNano())
 
 	// Initialize SuRF with an estimated number of keys
-	surf := NewSuRF(1000000)
+	surf := New(1000000)
 
 	// Test 1 Basic sequential keys
 	t.Run("Sequential Keys", func(t *testing.T) {
@@ -373,7 +373,7 @@ func TestSuRF_PrefixSearch(t *testing.T) {
 	rand.Seed(time.Now().UnixNano())
 
 	// Initialize SuRF with an estimated number of keys
-	surf := NewSuRF(1000000)
+	surf := New(1000000)
 
 	// We test basic prefix matching
 	t.Run("Basic Prefix Matching", func(t *testing.T) {
@@ -415,7 +415,7 @@ func TestSuRF_PrefixSearch(t *testing.T) {
 	// We test hierarchical prefixes
 	t.Run("Hierarchical Prefixes", func(t *testing.T) {
 		// Clear previous keys
-		surf = NewSuRF(1000000)
+		surf = New(1000000)
 
 		// Add hierarchical keys
 		hierarchicalKeys := [][]byte{
@@ -453,7 +453,7 @@ func TestSuRF_PrefixSearch(t *testing.T) {
 	// We test some edge cases
 	t.Run("Edge Cases", func(t *testing.T) {
 		// Clear previous keys
-		surf = NewSuRF(1000000)
+		surf = New(1000000)
 
 		edgeCaseKeys := [][]byte{
 			[]byte(""),
@@ -491,7 +491,7 @@ func TestSuRF_PrefixSearch(t *testing.T) {
 	// We test random prefixes with common beginnings
 	t.Run("Random Prefixes", func(t *testing.T) {
 		// Clear previous keys
-		surf = NewSuRF(1000000)
+		surf = New(1000000)
 
 		// Generate keys with common prefixes
 		prefixes := []string{"com", "org", "net", "edu"}
@@ -522,7 +522,7 @@ func TestSuRF_PrefixSearch(t *testing.T) {
 	// We test prefixExists function
 	t.Run("PrefixExists", func(t *testing.T) {
 		// Clear previous keys
-		surf = NewSuRF(1000000)
+		surf = New(1000000)
 
 		// Add test keys
 		testKeys := [][]byte{
@@ -552,4 +552,25 @@ func TestSuRF_PrefixSearch(t *testing.T) {
 			}
 		}
 	})
+}
+
+func BenchmarkAdd(b *testing.B) {
+	sf := New(b.N) // Initialize with benchmark size
+	data := []byte("testdata")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sf.Add(data)
+	}
+}
+
+func BenchmarkContains(b *testing.B) {
+	sf := New(1000)
+	data := []byte("testdata")
+	sf.Add(data)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sf.Contains(data)
+	}
 }

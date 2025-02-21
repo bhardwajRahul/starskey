@@ -42,8 +42,8 @@ type TrieNode struct {
 	Height   int                // Track node height for balanced deletion
 }
 
-// NewSuRF initializes a new SuRF
-func NewSuRF(expectedKeys int) *SuRF {
+// New initializes a new SuRF
+func New(expectedKeys int) *SuRF {
 	return &SuRF{
 		Trie:       &TrieNode{Children: make(map[byte]*TrieNode), Height: 1},
 		SuffixBits: OptimalSuffixBits(expectedKeys),
