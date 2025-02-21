@@ -5,14 +5,13 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/starskey-io/starskey.svg)](https://pkg.go.dev/github.com/starskey-io/starskey)
 
 Starskey is a fast embedded key-value store package for GO!  Starskey implements a multi-level, durable log structured merge tree.
-Starskey is optimized for write and read efficiency.
 
 ## Features
-- **Levelled partial merge compaction**  Compactions occur on writes, if any disk level reaches it's max size, then half of the sstables are merged into a new sstable and placed into the next level.  This algorithm is recursive until last level.  At last level if full we merge all sstables into a new sstable.  During merge operations tombstones(deleted keys) are removed when a key reaches the last level.
+- **Leveled partial merge compaction**  Compactions occur on writes. If any disk level reaches its maximum size, half of the sstables are merged into a new sstable and placed into the next level. This algorithm is recursive until the last level. At the last level, if full, we merge all sstables into a new SSTable. During merge operations, tombstones (deleted keys) are removed when a key reaches the last level.
 - **Simple API** with Put, Get, Delete, Range, FilterKeys, Update (for txns), PrefixSearch, LongestPrefixSearch, DeleteByRange, DeleteByFilter, DeleteByPrefix.
 - **Acid transactions** You can group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed operations within a transaction roll back.  These transactions would be considered fully serializable.  Transactions themselves are also thread safe so you can add operations to them safety.
 - **Configurable options** You can configure many options such as max levels, memtable threshold, bloom filter,succinct range filters, logging, compression and more.
-- **WAL with recovery** Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shutdown.  On sorted runs to disk the WAL is truncated.
+- **WAL with recovery** Starskey uses a write ahead log to ensure durability.  Memtable is replayed if a flush did not occur prior to shut down.  On sorted runs to disk the WAL is truncated.
 - **Key value separation** Keys and values are stored separately for sstables within a klog and vlog respectively.
 - **Bloom filters** Each sstable has an in memory bloom filter to reduce disk reads. Bloom filters are used to check if a key exists in an SST instead of scanning it entirely.
 - **Succinct Range Filters** If enabled, each sstable will use a SuRF instead of a bloom filter;  This will speed up range, prefix queries. Will use more memory than bloom filters. Only a bloom filter OR a SuRF filter can be enabled.
@@ -35,8 +34,8 @@ Below is a basic example of how to use starskey.
 
 ```go
 import (
+    "fmt"
     "github.com/starskey-io/starskey"
-    "log"
 )
 
 func main() {
@@ -218,7 +217,7 @@ if n, err := skey.DeleteByPrefix([]byte("key")); err != nil {
 
 ## Key Lifecycle
 A key once inserted will live in the memtable until it is flushed to disk.
-Once flushed to disk it will live in an sstable at l1 until it is compacted.  Once compacted it will be merged into a new sstable at the next level.  This process is recursive until the last level.  At the last level if full we merge all sstables into a new sstable.
+Once flushed to disk it will live in a sstable at l1 until it is compacted.  Once compacted it will be merged into a new sstable at the next level.  This process is recursive until the last level.  At the last level if full we merge all sstables into a new sstable.
 
 If a key is deleted it will live on the same way until it reaches last level at which point it will be removed entirely.
 
