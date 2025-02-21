@@ -21,18 +21,19 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson" // It's fast and simple for our use case
 	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/snappy"
 	"github.com/starskey-io/starskey/bloomfilter"
 	"github.com/starskey-io/starskey/pager"
 	"github.com/starskey-io/starskey/surf"
 	"github.com/starskey-io/starskey/ttree"
-	"go.mongodb.org/mongo-driver/bson" // It's fast and simple for our use case
-	"log"
-	"os"
-	"strings"
-	"sync"
-	"time"
 )
 
 // Global system variables
