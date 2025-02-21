@@ -1058,7 +1058,7 @@ func openLevels(config *Config) ([]*Level, error) {
 		levels[i].sstables = sstables
 
 		// Log that sh
-		log.Println("Level", i+1, "opened successfully")
+		log.Println("Level", levels[i].id, "opened successfully")
 
 	}
 
@@ -1529,6 +1529,7 @@ func (skey *Starskey) compact(level int) error {
 	skey.levels[level].sstables = skey.levels[level].sstables[numTablesToCompact:]
 
 	log.Println("Compaction of level", level+1, "completed successfully") // We add a +1 for logging as l0 is memtable l1 is start of disk levels..
+	log.Println("Merged SStable", mergedTable.klog.Name(), mergedTable.vlog.Name(), "moved to level", level+2)
 
 	// Recursively check next level
 	if nextLevel.shouldCompact() {
