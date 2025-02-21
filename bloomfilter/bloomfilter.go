@@ -21,11 +21,10 @@ import (
 	"bytes"
 	"encoding/gob"
 	"errors"
+	"github.com/zeebo/xxh3"
 	"hash"
 	"hash/fnv"
 	"math"
-
-	"github.com/zeebo/xxh3"
 	// We could compare against github.com/cespare/xxhash/v2 and github.com/zeebo/xxh3
 	// but may not be backwards compatible. We use both currently(cespare is used for SuRF) which may be redundant to import 2 packages doing same thing
 )
