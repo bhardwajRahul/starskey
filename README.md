@@ -7,7 +7,7 @@
 Starskey is a fast embedded key-value store package for GO!  Starskey implements a multi-level, durable log structured merge tree.
 
 ## Features
-- **Leveled partial merge compaction**  Compactions occur on writes. If any disk level reaches its maximum size, half of the sstables are merged into a new sstable and placed into the next level. This algorithm is recursive until the last level. At the last level, if full, we merge all sstables into a new SSTable. During merge operations, tombstones (deleted keys) are removed when a key reaches the last level.
+- **Leveled partial merge compaction**  Compactions occur on writes. If any disk level reaches its maximum size, half of the sstables are merged into a new sstable and placed into the next level. This algorithm is recursive until the last level. At the last level, if full, we merge all sstables into a new sstable. During merge operations, tombstones (deleted keys) are removed when a key reaches the last level.
 - **Simple API** with Put, Get, Delete, Range, FilterKeys, Update (for txns), PrefixSearch, LongestPrefixSearch, DeleteByRange, DeleteByFilter, DeleteByPrefix.
 - **Acid transactions** You can group multiple operations into a single atomic transaction.  If any operation fails the entire transaction is rolled back.  Only committed operations within a transaction roll back.  These transactions would be considered fully serializable.  Transactions themselves are also thread safe so you can add operations to them safety.
 - **Configurable options** You can configure many options such as max levels, memtable threshold, bloom filter,succinct range filters, logging, compression and more.
@@ -28,9 +28,9 @@ Chat everything Starskey @ our [Discord Server](https://discord.gg/HVxkhyys3R)
 Use the benchmark program at [bench](https://github.com/starskey-io/bench) to compare Starskey with other popular key value stores/engines.
 
 ## Basic Example
-Below is a basic example of how to use starskey.
+Below is a basic example of how to use Starskey.
 
-**Mind you examples use skey as the variable name for opened starskey instance(s).**
+**Mind you examples use `skey` as the variable name for opened starskey instance(s).**
 
 ```go
 import (
@@ -161,6 +161,8 @@ if err := txn.Commit(); err != nil {
 ```
 
 **OR**
+
+You should use `Update` if you want to say Get a value, modify it and then Put it back.
 
 ```go
 err = skey.Update(func(txn *Txn) error {
