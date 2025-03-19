@@ -97,82 +97,6 @@ func main() {
 
 ```
 
-## Ingesting log messages
-```
-package main
-
-import (
-    "fmt"
-    "github.com/starskey-io/starskey"
-    "sync"
-    "time"
-)
-
-func main() {
-    // Create a buffered channel for logs
-    logChannel := make(chan string, 1000)
-
-    // Create Starskey instance with log channel configured
-    skey, err := starskey.Open(&starskey.Config{
-        Permission:        0755,
-        Directory:         "db_dir",
-        FlushThreshold:    (1024 * 1024) * 24, // 24MB
-        MaxLevel:          3,
-        SizeFactor:        10,
-        BloomFilter:       false,
-        SuRF:              false,
-        Logging:           true,
-        Compression:       false,
-        CompressionOption: starskey.NoCompression,
-
-        // Configure the LogChannel in OptionalConfig
-        Optional: &starskey.OptionalConfig{
-            LogChannel: logChannel,
-            },
-    })
-    if err != nil {
-        fmt.Printf("Failed to open Starskey: %v\n", err)
-        return
-    }
-    defer skey.Close()
-
-    // Start a goroutine to consume and process logs in real-time
-    var wg sync.WaitGroup
-    wg.Add(1)
-
-    go func() {
-        defer wg.Done()
-        for logMsg := range logChannel {
-        // Process log messages in real-time
-        timestamp := time.Now().Format("2006-01-02 15:04:05.000")
-
-        fmt.Printf("[%s] %s\n", timestamp, logMsg)
-    }()
-
-    // Use Starskey for your normal operations
-    for i := 0; i < 100; i++ {
-        key := []byte(fmt.Sprintf("key%d", i))
-        value := []byte(fmt.Sprintf("value%d", i))
-
-        if err := skey.Put(key, value); err != nil {
-            fmt.Printf("Failed to put key-value: %v\n", err)
-        }
-    }
-
-    // The log channel will keep receiving logs until Starskey is closed
-    time.Sleep(2 * time.Second) // Give some time for operations to complete
-
-    // Close starskey as we are done
-    skey.Close()
-
-    // close the channel as Starskey doesn't close it
-    close(logChannel)
-
-    // Wait for log processing to complete
-    wg.Wait()
-}
-```
-
 ## Range Keys
 You can provide a start and end key to retrieve a range of keys values.
 ```go
@@ -317,6 +241,83 @@ if n, err := skey.DeleteByPrefix([]byte("key")); err != nil {
     // ..handle error
 }
 // n is amount of keys deleted
+```
+
+## Ingesting log messages
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/starskey-io/starskey"
+    "sync"
+    "time"
+)
+
+func main() {
+    // Create a buffered channel for logs
+    logChannel := make(chan string, 1000)
+
+    // Create Starskey instance with log channel configured
+    skey, err := starskey.Open(&starskey.Config{
+        Permission:        0755,
+        Directory:         "db_dir",
+        FlushThreshold:    (1024 * 1024) * 24, // 24MB
+        MaxLevel:          3,
+        SizeFactor:        10,
+        BloomFilter:       false,
+        SuRF:              false,
+        Logging:           true,
+        Compression:       false,
+        CompressionOption: starskey.NoCompression,
+
+        // Configure the LogChannel in OptionalConfig
+        Optional: &starskey.OptionalConfig{
+                LogChannel: logChannel,
+            },
+        })
+    if err != nil {
+        fmt.Printf("Failed to open Starskey: %v\n", err)
+        return
+    }
+    defer skey.Close()
+
+    // Start a goroutine to consume and process logs in real-time
+    var wg sync.WaitGroup
+
+    wg.Add(1) // Add one goroutine to wait for
+    go func() {
+        defer wg.Done()
+        for logMsg := range logChannel {
+            // Process log messages in real-time
+            timestamp := time.Now().Format("2006-01-02 15:04:05.000")
+
+            fmt.Printf("[%s] %s\n", timestamp, logMsg)
+        }
+    }()
+
+    // Use Starskey for your normal operations
+    for i := 0; i < 100; i++ {
+        key := []byte(fmt.Sprintf("key%d", i))
+        value := []byte(fmt.Sprintf("value%d", i))
+
+        if err := skey.Put(key, value); err != nil {
+            fmt.Printf("Failed to put key-value: %v\n", err)
+        }
+    }
+
+    // The log channel will keep receiving logs until Starskey is closed
+    time.Sleep(2 * time.Second) // Give some time for operations to complete
+
+    // Close starskey as we are done
+    skey.Close()
+
+    // close the channel as Starskey doesn't close it
+    close(logChannel)
+
+    // Wait for log processing to complete
+    wg.Wait()
+}
 ```
 
 ## Key Lifecycle
