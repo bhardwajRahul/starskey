@@ -20,6 +20,7 @@ Starskey is a fast embedded key-value store package for GO!  Starskey implements
 - **Logging** Logging to file is available.  Will write to standard out if not enabled.
 - **Thread safe** Starskey is thread safe.  Multiple goroutines can read and write to Starskey concurrently.  Starskey uses one global lock to keep things consistent.
 - **T-Tree memtable** the memory table is a balanced in-memory tree data structure, designed as an alternative to AVL trees and B-Trees for main-memory.
+- **Channel logging** You can log to a channel instead of a file or standard output.
 
 ## Discord
 Chat everything Starskey @ our [Discord Server](https://discord.gg/HVxkhyys3R)
@@ -59,6 +60,7 @@ func main() {
         //    TTreeMax:                .. Maximum degree of the T-Tree
         //    PageSize:                .. Page size for internal pagers
         //    BloomFilterProbability:  .. Bloom filter probability
+        //    LogChannel              chan string   // Log channel, instead of log file or standard output we log to a channel
         //    },
         }) // Config cannot be nil**
     if err != nil {
@@ -93,6 +95,82 @@ func main() {
 
 }
 
+```
+
+## Ingesting log messages
+```
+package main
+
+import (
+    "fmt"
+    "github.com/starskey-io/starskey"
+    "sync"
+    "time"
+)
+
+func main() {
+    // Create a buffered channel for logs
+    logChannel := make(chan string, 1000)
+
+    // Create Starskey instance with log channel configured
+    skey, err := starskey.Open(&starskey.Config{
+        Permission:        0755,
+        Directory:         "db_dir",
+        FlushThreshold:    (1024 * 1024) * 24, // 24MB
+        MaxLevel:          3,
+        SizeFactor:        10,
+        BloomFilter:       false,
+        SuRF:              false,
+        Logging:           true,
+        Compression:       false,
+        CompressionOption: starskey.NoCompression,
+
+        // Configure the LogChannel in OptionalConfig
+        Optional: &starskey.OptionalConfig{
+            LogChannel: logChannel,
+            },
+    })
+    if err != nil {
+        fmt.Printf("Failed to open Starskey: %v\n", err)
+        return
+    }
+    defer skey.Close()
+
+    // Start a goroutine to consume and process logs in real-time
+    var wg sync.WaitGroup
+    wg.Add(1)
+
+    go func() {
+        defer wg.Done()
+        for logMsg := range logChannel {
+        // Process log messages in real-time
+        timestamp := time.Now().Format("2006-01-02 15:04:05.000")
+
+        fmt.Printf("[%s] %s\n", timestamp, logMsg)
+    }()
+
+    // Use Starskey for your normal operations
+    for i := 0; i < 100; i++ {
+        key := []byte(fmt.Sprintf("key%d", i))
+        value := []byte(fmt.Sprintf("value%d", i))
+
+        if err := skey.Put(key, value); err != nil {
+            fmt.Printf("Failed to put key-value: %v\n", err)
+        }
+    }
+
+    // The log channel will keep receiving logs until Starskey is closed
+    time.Sleep(2 * time.Second) // Give some time for operations to complete
+
+    // Close starskey as we are done
+    skey.Close()
+
+    // close the channel as Starskey doesn't close it
+    close(logChannel)
+
+    // Wait for log processing to complete
+    wg.Wait()
+}
 ```
 
 ## Range Keys
