@@ -69,6 +69,7 @@ type OptionalConfig struct {
 	TTreeMax                int           // Maximum degree of the T-Tree
 	PageSize                int           // Page size
 	BloomFilterProbability  float64       // Bloom filter probability
+	LogChannel              chan string   // Log channel, instead of log file or standard output we log to a channel
 }
 
 // Config represents the configuration for starskey instance
@@ -248,22 +249,22 @@ func Open(config *Config) (*Starskey, error) {
 	}
 
 	// We log the configuration
-	log.Println("Opening Starskey with config:")
-	log.Println("Directory:      ", config.Directory)
-	log.Println("FlushThreshold: ", config.FlushThreshold)
-	log.Println("MaxLevel:       ", config.MaxLevel)
-	log.Println("SizeFactor:     ", config.SizeFactor)
-	log.Println("BloomFilter:    ", config.BloomFilter)
-	log.Println("SuRF:           ", config.SuRF)
-	log.Println("Compression:    ", config.Compression)
-	log.Println("CompressionOpt: ", config.CompressionOption)
-	log.Println("Logging:        ", config.Logging)
+	skey.WriteLog("Opening Starskey with config:")
+	skey.WriteLog(fmt.Sprintf("Directory:      %s", config.Directory))
+	skey.WriteLog(fmt.Sprintf("FlushThreshold: %d", config.FlushThreshold))
+	skey.WriteLog(fmt.Sprintf("MaxLevel:       %d", config.MaxLevel))
+	skey.WriteLog(fmt.Sprintf("SizeFactor:     %d", config.SizeFactor))
+	skey.WriteLog(fmt.Sprintf("BloomFilter:    %t", config.BloomFilter))
+	skey.WriteLog(fmt.Sprintf("SuRF:           %t", config.SuRF))
+	skey.WriteLog(fmt.Sprintf("Compression:    %t", config.Compression))
+	skey.WriteLog(fmt.Sprintf("CompressionOpt: %d", config.CompressionOption))
+	skey.WriteLog(fmt.Sprintf("Logging:        %t", config.Logging))
 
-	log.Println("Opening write ahead log")
+	skey.WriteLog("Opening write ahead log")
 
 	// We check if optional config is nil, if so we set defaults
 	if config.Optional == nil {
-		log.Println("Default optional config being used")
+		skey.WriteLog("Default optional config being used")
 		config.Optional = &OptionalConfig{}
 
 		if config.Optional.BackgroundFSync == false {
@@ -298,47 +299,47 @@ func Open(config *Config) (*Starskey, error) {
 		// If optional config is provided we check if values are valid
 		// if not we set defaults
 		if config.Optional.BackgroundFSyncInterval <= 0 {
-			log.Println("Default optional config being used instead of provided", config.Optional.BackgroundFSyncInterval)
+			skey.WriteLog(fmt.Sprintf("Default optional config being used instead of provided %s", config.Optional.BackgroundFSyncInterval))
 			config.Optional.BackgroundFSyncInterval = SyncInterval // Set default background fsync interval
 		}
 
 		if config.Optional.TTreeMin <= 0 {
-			log.Println("Default optional config being used instead of provided", config.Optional.TTreeMin)
+			skey.WriteLog(fmt.Sprintf("Default optional config being used instead of provided %d", config.Optional.TTreeMin))
 			config.Optional.TTreeMin = TTreeMin // Set default TTreeMin
 		}
 
 		if config.Optional.TTreeMax <= 0 {
-			log.Println("Default optional config being used instead of provided", config.Optional.TTreeMax)
+			skey.WriteLog(fmt.Sprintf("Default optional config being used instead of provided %d", config.Optional.TTreeMax))
 			config.Optional.TTreeMax = TTreeMax // Set default TTreeMax
 		}
 
 		if config.Optional.PageSize <= 0 {
-			log.Println("Default optional config being used instead of provided", config.Optional.PageSize)
+			skey.WriteLog(fmt.Sprintf("Default optional config being used instead of provided %d", config.Optional.PageSize))
 			config.Optional.PageSize = PageSize // Set default PageSize
 		}
 
 		if config.Optional.BloomFilterProbability <= 0 {
-			log.Println("Default optional config being used instead of provided", config.Optional.BloomFilterProbability)
+			skey.WriteLog(fmt.Sprintf("Default optional config being used instead of provided %f", config.Optional.BloomFilterProbability))
 			config.Optional.BloomFilterProbability = BloomFilterProbability // Set default BloomFilterProbability
 		}
 
 		if config.Optional.BackgroundFSyncInterval <= 0 {
-			log.Println("Default optional config being used instead of provided", config.Optional.BackgroundFSyncInterval)
+			skey.WriteLog(fmt.Sprintf("Default optional config being used instead of provided %s", config.Optional.BackgroundFSyncInterval))
 			config.Optional.BackgroundFSyncInterval = SyncInterval // Set default background fsync interval
 		}
 
 		// We log the usage of optional configs for the user
 
-		log.Println("Optional config:")
-		log.Println("  > BackgroundFSync:         ", config.Optional.BackgroundFSync)
-		log.Println("  > BackgroundFSyncInterval: ", config.Optional.BackgroundFSyncInterval)
-		log.Println("  > TTreeMin:                ", config.Optional.TTreeMin)
-		log.Println("  > TTreeMax:                ", config.Optional.TTreeMax)
-		log.Println("  > PageSize:                ", config.Optional.PageSize)
-		log.Println("  > BloomFilterProbability:  ", config.Optional.BloomFilterProbability)
+		skey.WriteLog("Optional config:")
+		skey.WriteLog(fmt.Sprintf("  > BackgroundFSync:         %t", config.Optional.BackgroundFSync))
+		skey.WriteLog(fmt.Sprintf("  > BackgroundFSyncInterval: %s", config.Optional.BackgroundFSyncInterval))
+		skey.WriteLog(fmt.Sprintf("  > TTreeMin:                %d", config.Optional.TTreeMin))
+		skey.WriteLog(fmt.Sprintf("  > TTreeMax:                %d", config.Optional.TTreeMax))
+		skey.WriteLog(fmt.Sprintf("  > PageSize:                %d", config.Optional.PageSize))
+		skey.WriteLog(fmt.Sprintf("  > BloomFilterProbability:  %f", config.Optional.BloomFilterProbability))
 	}
 
-	log.Println("Background file sync interval: ", config.Optional.BackgroundFSyncInterval)
+	skey.WriteLog(fmt.Sprintf("Background file sync interval: %s", config.Optional.BackgroundFSyncInterval))
 
 	// We create/open the write-ahead log within the configured directory
 	walPath := config.Directory + WALExtension
@@ -350,37 +351,37 @@ func Open(config *Config) (*Starskey, error) {
 	// We set the write-ahead log
 	skey.wal = wal
 
-	log.Println("Write-ahead log opened successfully")
+	skey.WriteLog("Write-ahead log opened successfully")
 
-	log.Println("Creating memory table with threshold: ", config.FlushThreshold, "and min/max degree: ", config.Optional.TTreeMin, config.Optional.TTreeMax)
+	skey.WriteLog(fmt.Sprintf("Creating memory table with threshold: %d and min/max degree: %d %d", config.FlushThreshold, config.Optional.TTreeMin, config.Optional.TTreeMax))
 
 	// We create the memtable
 	skey.memtable = ttree.New(TTreeMin, TTreeMax)
 
-	log.Println("Memory table created successfully")
+	skey.WriteLog("Memory table created successfully")
 
-	log.Println("Opening levels")
+	skey.WriteLog("Opening levels")
 
 	// We open disk levels and their SSTables
-	skey.levels, err = openLevels(config)
+	skey.levels, err = skey.openLevels(config)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Println("Levels opened successfully")
+	skey.WriteLog("Levels opened successfully")
 
 	skey.lock = &sync.Mutex{}
 
-	log.Println("Replaying WAL")
+	skey.WriteLog("Replaying WAL")
 
 	// We replay the write-ahead log and populate the memtable
 	if err = skey.replayWAL(); err != nil {
 		return nil, err
 	}
 
-	log.Println("WAL replayed successfully")
+	skey.WriteLog("WAL replayed successfully")
 
-	log.Println("Starskey opened successfully")
+	skey.WriteLog("Starskey opened successfully")
 
 	return skey, nil
 }
@@ -388,19 +389,19 @@ func Open(config *Config) (*Starskey, error) {
 // Close closes the Starskey instance
 func (skey *Starskey) Close() error {
 
-	log.Println("Closing WAL")
+	skey.WriteLog("Closing WAL")
 
 	// Close the write-ahead log
 	if err := skey.wal.Close(); err != nil {
 		return err
 	}
 
-	log.Println("Closed WAL")
+	skey.WriteLog("Closed WAL")
 
-	log.Println("Closing levels")
+	skey.WriteLog("Closing levels")
 
 	for _, level := range skey.levels {
-		log.Println("Closing level", level.id)
+		skey.WriteLog(fmt.Sprintf("Closing level %d", level.id))
 		for _, sstable := range level.sstables {
 			// We close opened sstable files
 			if err := sstable.klog.Close(); err != nil {
@@ -411,12 +412,12 @@ func (skey *Starskey) Close() error {
 			}
 		}
 
-		log.Println("Level", level.id, "closed")
+		skey.WriteLog(fmt.Sprintf("Level %d closed", level.id))
 	}
 
-	log.Println("Levels closed")
+	skey.WriteLog("Levels closed")
 
-	log.Println("Starskey closed successfully")
+	skey.WriteLog("Starskey closed successfully")
 
 	if skey.logFile != nil { // If log configured, we close it
 		if err := skey.logFile.Close(); err != nil {
@@ -425,6 +426,28 @@ func (skey *Starskey) Close() error {
 	}
 
 	return nil
+}
+
+// WriteLog writes to the log file or standard output or a channel if configured
+func (skey *Starskey) WriteLog(data string) {
+	if skey.config.Optional != nil {
+		if skey.config.Optional.LogChannel != nil {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Println(data)
+				}
+			}()
+			select {
+			case skey.config.Optional.LogChannel <- data:
+				// Successfully wrote to the channel
+				return
+			default:
+				// Channel is full
+			}
+		}
+	}
+
+	log.Println(data)
 }
 
 // appendToWal appends a WAL record to the write-ahead log
@@ -1035,7 +1058,7 @@ func (txn *Txn) Rollback() error {
 }
 
 // openLevels opens disk levels and their SSTables and returns a slice of Level
-func openLevels(config *Config) ([]*Level, error) {
+func (skey *Starskey) openLevels(config *Config) ([]*Level, error) {
 	levels := make([]*Level, config.MaxLevel) // We create a slice of levels
 
 	// We iterate over the number of levels
@@ -1049,7 +1072,7 @@ func openLevels(config *Config) ([]*Level, error) {
 		}
 
 		// Open the SSTables
-		sstables, err := openSSTables(fmt.Sprintf("%s%s%d", config.Directory, LevelPrefix, i+1), config.BloomFilter, config.Permission, config.SuRF)
+		sstables, err := skey.openSSTables(fmt.Sprintf("%s%s%d", config.Directory, LevelPrefix, i+1), config.BloomFilter, config.Permission, config.SuRF)
 		if err != nil {
 			return nil, err
 		}
@@ -1058,7 +1081,7 @@ func openLevels(config *Config) ([]*Level, error) {
 		levels[i].sstables = sstables
 
 		// Log that sh
-		log.Println("Level", levels[i].id, "opened successfully")
+		skey.WriteLog(fmt.Sprintf("Level %d opened successfully", levels[i].id))
 
 	}
 
@@ -1066,8 +1089,8 @@ func openLevels(config *Config) ([]*Level, error) {
 }
 
 // openSSTables opens SSTables in a directory and returns a slice of SSTable
-func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SSTable, error) {
-	log.Println("Opening SSTables for level", directory)
+func (skey *Starskey) openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SSTable, error) {
+	skey.WriteLog(fmt.Sprintf("Opening SSTables for level %s", directory))
 	sstables := make([]*SSTable, 0)
 
 	// We check if configured directory ends with a slash
@@ -1097,7 +1120,7 @@ func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SST
 			if strings.HasSuffix(file.Name(), KLogExtension) {
 				// Open the key log
 				klogPath := fmt.Sprintf("%s%s", directory, file.Name())
-				log.Println("Opening SSTable klog", klogPath)
+				skey.WriteLog(fmt.Sprintf("Opening SSTable klog %s", klogPath))
 				klog, err := pager.Open(klogPath, os.O_CREATE|os.O_RDWR, perm, PageSize, false, SyncInterval)
 				if err != nil {
 					return nil, err
@@ -1105,7 +1128,7 @@ func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SST
 
 				// Open the value log for the key log
 				vlogPath := strings.TrimRight(klogPath, KLogExtension) + VLogExtension
-				log.Println("Opening SSTable vlog", vlogPath)
+				skey.WriteLog(fmt.Sprintf("Opening SSTable vlog %s", vlogPath))
 				vlog, err := pager.Open(vlogPath, os.O_CREATE|os.O_RDWR, perm, PageSize, false, SyncInterval)
 				if err != nil {
 					return nil, err
@@ -1117,7 +1140,7 @@ func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SST
 				}
 
 				if bf {
-					log.Println("Opening bloom filter for SSTable", strings.TrimRight(klogPath, KLogExtension)+BloomFilterExtension)
+					skey.WriteLog(fmt.Sprintf("Opening bloom filter for SSTable %s", strings.TrimRight(klogPath, KLogExtension)+BloomFilterExtension))
 					bloomFilterFile, err := os.ReadFile(strings.TrimRight(klogPath, KLogExtension) + BloomFilterExtension)
 					if err != nil && !os.IsNotExist(err) { // Allow file not exist error
 						return nil, err
@@ -1128,13 +1151,13 @@ func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SST
 							return nil, err
 						}
 						sst.bloomfilter = deserializedBf
-						log.Println("Bloom filter opened successfully for SSTable")
+						skey.WriteLog("Bloom filter opened successfully for SSTable")
 					}
 				}
 
 				if srf {
 					surfPath := strings.TrimRight(klogPath, KLogExtension) + SuRFExtension
-					log.Println("Opening SuRF filter for SSTable", surfPath)
+					skey.WriteLog(fmt.Sprintf("Opening SuRF filter for SSTable %s", surfPath))
 					surfFile, err := os.ReadFile(surfPath)
 					if err != nil && !os.IsNotExist(err) { // Allow file not exist error
 						return nil, err
@@ -1145,7 +1168,7 @@ func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SST
 							return nil, err
 						}
 						sst.surf = deserializedSurf
-						log.Println("SuRF filter opened successfully for SSTable")
+						skey.WriteLog("SuRF filter opened successfully for SSTable")
 					}
 				}
 
@@ -1162,7 +1185,7 @@ func openSSTables(directory string, bf bool, perm os.FileMode, srf bool) ([]*SST
 func (skey *Starskey) replayWAL() error {
 
 	if skey.wal.PageCount() == 0 {
-		log.Println("No records in WAL to replay")
+		skey.WriteLog("No records in WAL to replay")
 		return nil
 	}
 
@@ -1203,7 +1226,7 @@ func (skey *Starskey) replayWAL() error {
 
 // run runs a sorted flush to disk level 1
 func (skey *Starskey) run() error {
-	log.Println("Running sorted run to l1")
+	skey.WriteLog("Running sorted run to l1")
 	// Create a new SSTable
 	sstable := &SSTable{
 		klog: nil,
@@ -1241,7 +1264,7 @@ func (skey *Starskey) run() error {
 		// We get a count of entries in the memtable
 		mtCount := uint(skey.memtable.CountEntries())
 
-		log.Printf("Creating SuRF for run with %d entries\n", mtCount)
+		skey.WriteLog(fmt.Sprintf("Creating SuRF for run with %d entries", mtCount))
 
 		srf := surf.New(int(mtCount))
 
@@ -1284,7 +1307,7 @@ func (skey *Starskey) run() error {
 
 		sstable.surf = srf
 
-		log.Println("SuRF created for sstable")
+		skey.WriteLog("SuRF created for sstable")
 
 	}
 
@@ -1301,7 +1324,7 @@ func (skey *Starskey) run() error {
 		// We get a count of entries in the memtable
 		mtCount := uint(skey.memtable.CountEntries())
 
-		log.Printf("Creating bloom filter for run with %d entries\n", mtCount)
+		skey.WriteLog(fmt.Sprintf("Creating bloom filter for run with %d entries", mtCount))
 
 		bf, err := bloomfilter.New(mtCount, BloomFilterProbability)
 		if err != nil {
@@ -1347,7 +1370,7 @@ func (skey *Starskey) run() error {
 
 		sstable.bloomfilter = bf
 
-		log.Println("Bloom filter created for sstable")
+		skey.WriteLog("Bloom filter created for sstable")
 
 	}
 
@@ -1429,7 +1452,7 @@ func (skey *Starskey) run() error {
 	// Clear the memtable
 	skey.memtable = ttree.New(TTreeMin, TTreeMax)
 
-	log.Println("Memtable cleared")
+	skey.WriteLog("Memtable cleared")
 
 	// We truncate the write-ahead log
 	if err := skey.wal.Truncate(); err != nil {
@@ -1446,9 +1469,9 @@ func (skey *Starskey) run() error {
 	// Append the SSTable to the first level
 	skey.levels[0].sstables = append(skey.levels[0].sstables, sstable)
 
-	log.Println("Write-ahead log truncated")
+	skey.WriteLog("Write-ahead log truncated")
 
-	log.Println("Sorted run to l1 completed successfully")
+	skey.WriteLog("Sorted run to l1 completed successfully")
 
 	// Check if compaction is needed
 	if skey.levels[0].shouldCompact() {
@@ -1464,7 +1487,7 @@ func (skey *Starskey) run() error {
 // compact compacts level(s) recursively
 // only if the level is full based on the max size
 func (skey *Starskey) compact(level int) error {
-	log.Println("Compacting level", level+1)
+	skey.WriteLog(fmt.Sprintf("Compacting level %d", level+1))
 	// Ensure we do not go beyond the last level
 	if level >= len(skey.levels)-1 {
 		// Handle the case when the last level is full
@@ -1487,7 +1510,7 @@ func (skey *Starskey) compact(level int) error {
 
 			// Replace the SSTables in the last level with the merged table
 			skey.levels[level].sstables = []*SSTable{mergedTable}
-			log.Println("Compaction of last level completed successfully")
+			skey.WriteLog("Compaction of last level completed successfully")
 		}
 		return nil
 	}
@@ -1528,8 +1551,8 @@ func (skey *Starskey) compact(level int) error {
 	// Remove compacted tables from current level
 	skey.levels[level].sstables = skey.levels[level].sstables[numTablesToCompact:]
 
-	log.Println("Compaction of level", level+1, "completed successfully") // We add a +1 for logging as l0 is memtable l1 is start of disk levels..
-	log.Println("Merged SStable", mergedTable.klog.Name(), mergedTable.vlog.Name(), "moved to level", level+2)
+	skey.WriteLog(fmt.Sprintf("Compaction of level %d completed successfully", level+1)) // We add a +1 for logging as l0 is memtable l1 is start of disk levels..
+	skey.WriteLog(fmt.Sprintf("Merged SStable %s %s %s %d", mergedTable.klog.Name(), mergedTable.vlog.Name(), "moved to level", level+2))
 
 	// Recursively check next level
 	if nextLevel.shouldCompact() {
@@ -1564,9 +1587,9 @@ type iteratorWithData struct {
 // mergeTables merges SSTables and returns a new SSTable
 // removes tombstones and sorts the keys
 func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
-	log.Println("Starting merge operation of tables:")
+	skey.WriteLog("Starting merge operation of tables:")
 	for _, tbl := range tables {
-		log.Println(tbl.klog.Name(), tbl.vlog.Name())
+		skey.WriteLog(fmt.Sprintf("%s %s", tbl.klog.Name(), tbl.vlog.Name()))
 	}
 
 	if len(tables) == 0 {
@@ -1778,7 +1801,7 @@ func (skey *Starskey) mergeTables(tables []*SSTable, level int) *SSTable {
 		}
 	}
 
-	log.Println("Merge operation of tables completed successfully with new output table: ", sstable.klog.Name(), sstable.vlog.Name())
+	skey.WriteLog(fmt.Sprintf("Merge operation of tables completed successfully with new output table: %s %s", sstable.klog.Name(), sstable.vlog.Name()))
 
 	return sstable
 }
@@ -1898,8 +1921,8 @@ func (sst *SSTable) createSuRF(skey *Starskey) error {
 	// Set the SuRF filter for the SSTable
 	sst.surf = surf
 
-	log.Println("SuRF filter created successfully for SSTable:",
-		strings.TrimSuffix(sst.klog.Name(), KLogExtension))
+	skey.WriteLog(fmt.Sprintf("SuRF filter created successfully for SSTable: %s\n",
+		strings.TrimSuffix(sst.klog.Name(), KLogExtension)))
 
 	return nil
 }
@@ -1946,13 +1969,13 @@ func deserializeWalRecord(data []byte, decompress bool, option CompressionOption
 		case SnappyCompression:
 			decompressedData, err := snappy.Decode(nil, data)
 			if err != nil {
-				log.Fatal("Error decompressing data:", err)
+				return nil, errors.New(fmt.Sprintf("error decompressing data: %s", err))
 			}
 			data = decompressedData
 		case S2Compression:
 			decompressedData, err := s2.Decode(nil, data)
 			if err != nil {
-				log.Fatal("Error decompressing data:", err)
+				return nil, errors.New(fmt.Sprintf("error decompressing data: %s", err))
 			}
 			data = decompressedData
 		}
@@ -2008,13 +2031,13 @@ func deserializeKLogRecord(data []byte, decompress bool, option CompressionOptio
 		case SnappyCompression:
 			decompressedData, err := snappy.Decode(nil, data)
 			if err != nil {
-				log.Fatal("Error decompressing data:", err)
+				return nil, errors.New(fmt.Sprintf("error decompressing data: %s", err))
 			}
 			data = decompressedData
 		case S2Compression:
 			decompressedData, err := s2.Decode(nil, data)
 			if err != nil {
-				log.Fatal("Error decompressing data:", err)
+				return nil, errors.New(fmt.Sprintf("error decompressing data: %s", err))
 			}
 			data = decompressedData
 		}
@@ -2070,13 +2093,13 @@ func deserializeVLogRecord(data []byte, decompress bool, option CompressionOptio
 		case SnappyCompression:
 			decompressedData, err := snappy.Decode(nil, data)
 			if err != nil {
-				log.Fatal("Error decompressing data:", err)
+				return nil, errors.New(fmt.Sprintf("error decompressing data: %s", err))
 			}
 			data = decompressedData
 		case S2Compression:
 			decompressedData, err := s2.Decode(nil, data)
 			if err != nil {
-				log.Fatal("Error decompressing data:", err)
+				return nil, errors.New(fmt.Sprintf("error decompressing data: %s", err))
 			}
 			data = decompressedData
 		}
